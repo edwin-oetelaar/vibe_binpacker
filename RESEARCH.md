@@ -238,6 +238,24 @@ inflated by up to one cell all around. For a typical job - say 20 parts of
 nothing, but it is smaller than the gap between a mediocre and a good
 algorithm, which is the right thing to spend effort on first.
 
+Measured, on this workstation, with the `jobs/demo.job` 36-part workload and
+the bottom-left-fill jump scan (`pixi run benchmark`):
+
+| cell | sheet cells | candidates | seconds | utilisation |
+| ---- | ----------- | ---------- | ------- | ----------- |
+| 2.00 mm | 600 x 600 | 248 531 | 0.004 | 78.66 % |
+| 1.00 mm | 1200 x 1200 | 425 187 | 0.006 | 78.53 % |
+| 0.50 mm | 2400 x 2400 | 849 802 | 0.018 | 78.53 % |
+| 0.25 mm | 4800 x 4800 | 1 699 032 | 0.065 | 78.53 % |
+
+Two things to read from that. First, the *construction* heuristic scales far
+better than the erosion figures above: about 3x per halving rather than 8x,
+because a bottom-left scan is output sensitive and stops as soon as it finds a
+spot. It is the metaheuristic doing millions of scans that makes fine grids
+expensive, not one pass. Second, the coarse grid flatters itself: utilisation
+is counted in cells, and at 2 mm every part is rounded up more, so the 78.66 %
+is measuring inflated parts rather than a better packing.
+
 Recommendation: **make the cell size a configuration parameter from day one**
 (it costs nothing now and is painful to retrofit), default 1.0 mm, and expect
 0.5 mm to be the practical fine setting. Do not plan on 0.1 mm as a global

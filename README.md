@@ -8,55 +8,87 @@ The core is deterministic C11 with no allocation in the hot path. Python does
 tooling (DXF/SVG import, reporting, plots) and a separate binary does the GUI.
 The solver itself never needs either.
 
-Status: **phase P0 done** - build environment, contract macro and the
-`bp_bitmap` bit grid with tests. No solver yet. [PLAN.md](PLAN.md) has the
-design, the algorithm and the phased roadmap; [RESEARCH.md](RESEARCH.md) has
-the literature review that shaped them.
+Status: **phases P0 and P1 done** - there is a working rectangle nester with
+a CLI and SVG output. The search layer that makes it good is still ahead.
+[PLAN.md](PLAN.md) has the design, the algorithm and the phased roadmap;
+[RESEARCH.md](RESEARCH.md) has the literature review that shaped them.
 
-## Approach in one paragraph
+## Approach
 
-The plate is a grid of bits, cell size configurable and 1 mm by default:
-1200 x 1200 cells, 19 `uint64_t` words per
-row, 182 KB for the whole sheet, so the collision oracle lives in L2 cache.
-Parts are conservatively rasterised into bit masks, one per allowed rotation.
-Instead of testing candidate positions one pixel at a time, the set of *all*
-legal positions for a part is computed as a binary morphological erosion of
-the free space by the part mask, using shift-and passes over whole 64-bit
-words. That turns "where does this fit" from a scan into a handful of
-milliseconds, and because the full feasible set is available, placements can be
-*scored* (bottom-left, contact, remnant quality) rather than taken first-fit.
-On top of that, the search layer follows what the nesting literature says
-actually wins: not a metaheuristic over part order, but **overlap
-minimisation**. Parts are allowed to overlap temporarily and a guided local
-search drives total penetration back to zero, wrapped in a squeeze loop that
-deliberately makes the layout infeasible and then repairs it. The same
-bitboard serves that directly: a per-row prefix popcount answers "how much
-does this part overlap here" in one subtraction per row span, which is the
-raster penetration map of Sato et al. (2019).
+The plate is a grid of bits, cell size configurable and 1 mm by default. At
+1 mm a 1200 x 1200 sheet is 19 `uint64_t` words per row and 182 KB in total,
+so the collision oracle lives in L2 cache. Parts are conservatively rasterised
+into bit masks stored as row spans, one mask per allowed rotation. Concave
+shapes and polygons with holes need no special code in that representation,
+and a part nesting *inside another part's hole* falls straight out of it. The
+price is a 1 mm quantisation, which is below the laser kerf.
 
-Consequences of the pixel model that matter here: concave shapes and polygons
-with holes need no special geometry code, and a part nesting *inside another
-part's hole* falls straight out of the representation. The price is a 1 mm
-quantisation, which is below the laser kerf and therefore acceptable.
+Clearance works the way the literature does it: each part carries two masks,
+the true geometry and a copy grown by the requested gap. The search tests the
+grown one and the sheet records the true one, which leaves exactly the gap you
+asked for rather than twice it.
+
+What exists today is **bottom-left-fill**: each part goes to the lowest, then
+leftmost free spot. That is the published baseline and the standard
+initialiser, but on its own it plateaus. What comes next, and where the
+material savings are, is the winning family from the literature: not a
+metaheuristic over part order, but **overlap minimisation**. Parts are allowed
+to overlap temporarily and a guided local search drives total penetration back
+to zero, wrapped in a squeeze loop that deliberately makes the layout
+infeasible and then repairs it. The same bitboard serves that directly - a
+per-row prefix popcount answers "how much does this part overlap here" in one
+subtraction per row span, which is the raster penetration map of Sato et al.
+(2019).
+
+## Try it
+
+```sh
+pixi run demo
+```
+
+That packs [jobs/demo.job](jobs/demo.job) - 36 rectangles on a 1200 x 1200 mm
+plate with 1 mm between parts - writes `demo.svg`, and then re-checks the
+result with [tools/check_layout.py](tools/check_layout.py), which reads the
+SVG back and verifies independently that nothing overlaps, nothing leaves the
+sheet and the clearance holds.
+
+```sh
+pixi run benchmark
+```
+
+sweeps cell size and placement mode and prints CSV.
+
+The job format is line based on purpose, so the solver needs no parser
+dependency:
+
+    sheet 1200 1200        # plate size in mm
+    cell 1.0               # grid resolution in mm
+    clearance 1.0          # gap to leave between parts, in mm
+    rect 1 2 600 300 1     # id, quantity, width, height, may turn 90 degrees
 
 ## Layout
 
-Implemented so far: `bp_contract.h`, `bp_bitmap.[ch]`, `test_bp_bitmap.c`.
+Built and tested:
 
-    bp_bitmap.[ch]    bitboard, shifts, run masks
+    bp_contract.h     fail-fast contract macro
+    bp_bitmap.[ch]    bitboard rows, shifts, span queries, counts
+    bp_mask.[ch]      part footprint as row spans, blit, overlap
+    bp_place.[ch]     bottom-left query: reference scan and jump scan
+    bp_nester.[ch]    sequence decoder, bottom-left-fill
+    bp_job.[ch]       job file loading and mask construction
+    bp_svg.[ch]       solution to SVG
+    bp_pack.c         CLI
+    bp_bench.c        repeatable benchmark
+    tools/            Python tooling
+
+Still to come:
+
     bp_polygon.[ch]   rings, validation, transforms
     bp_raster.[ch]    conservative scanline fill, dilation
-    bp_part.[ch]      per-orientation solid/collision/outline masks
-    bp_place.[ch]     feasible positions: reference scan and erosion
-    bp_nester.[ch]    sequence decoder
     bp_penetration.[ch] prefix popcount, penetration map
     bp_separate.[ch]  guided local search over overlap
     bp_search.[ch]    squeeze / separate / accept outer loop
-    bp_svg.[ch]       solution to SVG
-    bp_pack.c         CLI
-    tools/            Python: DXF/SVG import, plots, reports
-    gui/              cimgui (the C API for Dear ImGui) + sokol; last phase,
-                      SVG output comes first
+    gui/              cimgui (the C API for Dear ImGui) + sokol; last phase
 
 ## Build
 
@@ -70,8 +102,7 @@ pixi run test
 pixi run test-sanitize
 ```
 
-`pixi run build` and `pixi run clean` are the other tasks. `benchmark` and
-`demo` arrive with the first solver phase.
+The other tasks are `build`, `demo`, `benchmark` and `clean`.
 
 Compiler flags are fixed at `-std=c11 -Wall -Wextra -Werror -pedantic`, with
 AddressSanitizer and UndefinedBehaviorSanitizer runs required for any change

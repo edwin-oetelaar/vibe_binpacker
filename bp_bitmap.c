@@ -23,6 +23,24 @@ s_popcount(uint64_t value)
 #endif
 }
 
+/* Returns the index of the highest set bit; the word must not be zero. */
+static uint32_t
+s_highest_bit(uint64_t value)
+{
+    BP_REQUIRE(value != UINT64_C(0));
+#if defined(__GNUC__) || defined(__clang__)
+    return (S_WORD_BITS - 1U) - (uint32_t) __builtin_clzll(value);
+#else
+    {
+        uint32_t index = 0U;
+
+        while ((value >>= 1) != UINT64_C(0))
+            ++index;
+        return index;
+    }
+#endif
+}
+
 /*
  * Builds a mask of bits [lo, hi) inside one word. Shifting a 64-bit value by
  * 64 is undefined behaviour, so the full-word case is handled separately.
@@ -267,6 +285,42 @@ bp_bitmap_span_count(const bp_bitmap_t *bitmap, uint32_t y, uint32_t x,
         count += s_popcount(row[word] & s_word_mask(lo, hi));
     }
     return count;
+}
+
+/*
+ * Finds the largest occupied cell in a span, scanning words from the top so
+ * the first hit is the answer.
+ */
+int
+bp_bitmap_span_last_occupied(const bp_bitmap_t *bitmap, uint32_t y, uint32_t x,
+    uint32_t length, uint32_t *out_x)
+{
+    const uint64_t *row;
+    uint32_t end;
+    uint32_t first;
+    uint32_t last;
+    uint32_t word;
+
+    s_require_span(bitmap, y, x, length);
+    BP_REQUIRE(out_x);
+    row = bp_bitmap_row_const(bitmap, y);
+    end = x + length;
+    first = x / S_WORD_BITS;
+    last = (end - 1U) / S_WORD_BITS;
+
+    for (word = last + 1U; word-- > first;) {
+        uint32_t lo = (word == first) ? x % S_WORD_BITS : 0U;
+        uint32_t hi = (word == last)
+            ? ((end - 1U) % S_WORD_BITS) + 1U
+            : S_WORD_BITS;
+        uint64_t masked = row[word] & s_word_mask(lo, hi);
+
+        if (masked != UINT64_C(0)) {
+            *out_x = word * S_WORD_BITS + s_highest_bit(masked);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* Counts occupied cells in one in-bounds row. */

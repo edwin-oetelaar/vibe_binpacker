@@ -95,6 +95,16 @@ uint32_t
 bp_bitmap_span_count(const bp_bitmap_t *bitmap, uint32_t y, uint32_t x,
     uint32_t length);
 
+/*
+ * Finds the largest occupied cell in [x, x + length) of row y. Returns 1 and
+ * writes that cell to out_x, or returns 0 and leaves out_x untouched when the
+ * span is free. The bottom-left scan uses this to jump past a blocker instead
+ * of advancing one cell at a time.
+ */
+int
+bp_bitmap_span_last_occupied(const bp_bitmap_t *bitmap, uint32_t y, uint32_t x,
+    uint32_t length, uint32_t *out_x);
+
 /* Counts occupied cells in one in-bounds row. */
 uint32_t
 bp_bitmap_row_count(const bp_bitmap_t *bitmap, uint32_t y);

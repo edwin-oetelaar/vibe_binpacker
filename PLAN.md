@@ -247,25 +247,34 @@ Pure C11 core, no allocation in the hot path, caller-owned buffers, `bp_`
 prefix for public symbols and `s_` for file-local statics, following the
 `AGENTS.md` rules already in use in `~/tmp_codex`.
 
+Modules marked **done** exist and are tested.
+
 | module         | responsibility                                              |
 | -------------- | ----------------------------------------------------------- |
-| `bp_contract`  | `BP_REQUIRE`, fail-fast macros                              |
-| `bp_bitmap`    | bitboard rows, shift/and/or, run masks, occupancy count     |
+| `bp_contract`  | **done** `BP_REQUIRE`, fail-fast macro                      |
+| `bp_bitmap`    | **done** bitboard rows, shifts, span queries, counts        |
+| `bp_mask`      | **done** part footprint as row spans, blit, overlap         |
+| `bp_place`     | **done** bottom-left query: reference scan and jump scan    |
+| `bp_nester`    | **done** sequence decoder, produces a placement list        |
+| `bp_job`       | **done** job file loading, mask construction, ownership     |
+| `bp_svg`       | **done** solution to SVG, for eyeballing without a GUI      |
+| `bp_pack`      | **done** CLI front end                                      |
+| `bp_bench`     | **done** repeatable benchmark over cell sizes and modes     |
 | `bp_polygon`   | rings, validation, transform, area, winding                 |
 | `bp_raster`    | conservative scanline fill, hole clearing, dilation         |
-| `bp_part`      | part = orientations, each with solid/collision/outline mask |
-| `bp_place`     | feasible-position query: reference scan and erosion path    |
 | `bp_score`     | candidate scoring functions                                 |
-| `bp_nester`    | sequence decoder, produces a placement list                 |
 | `bp_penetration`| per-row prefix popcount, penetration map queries            |
-| `bp_separate`  | guided local search that resolves overlap                    |
-| `bp_search`    | squeeze/separate/accept outer loop, time budget              |
-| `bp_job`       | job/solution text I/O                                       |
-| `bp_svg`       | solution to SVG, for eyeballing without a GUI               |
-| `bp_pack`      | CLI front end                                               |
+| `bp_separate`  | guided local search that resolves overlap                   |
+| `bp_search`    | squeeze/separate/accept outer loop, time budget             |
 
-`bp_bitmap` can start as a port of `mt_bitmap` from `~/tmp_codex`, extended
-with shifted-AND, run masks and mask blitting.
+The erosion path of section 3.3 will slot in behind the existing `bp_place`
+API as a third mode, tested against the same reference scan.
+
+One measured correction to section 3.2, from `bp_bench`: taking the *largest*
+jump over all spans of the mask is a bad trade. It cuts candidate positions by
+only 0.4 % over stopping at the first blocking span, and costs about seventy
+times more work per position, because most candidates are rejected by their
+very first span. `bp_place` stops at the first blocker.
 
 ## 5. Data and file formats
 
@@ -328,7 +337,7 @@ Each phase ends with tests green and a benchmark number recorded.
 | phase | content                                                        | done when |
 | ----- | -------------------------------------------------------------- | --------- |
 | P0 | pixi env, Makefile, `bp_contract`, `bp_bitmap` + tests            | **done**: `pixi run test` and `pixi run test-sanitize` green |
-| P1 | rectangles, reference scan + jump scan, 90 deg, SVG out, CLI      | reproduces the `mt_nester` reference cases |
+| P1 | rectangles, reference scan + jump scan, 90 deg, SVG out, CLI      | **done**: `pixi run demo` packs 36 parts at 78.5 % with verified 1 mm clearance |
 | P2 | erosion engine, equivalence property test, benchmark              | measured speedup vs P1 on the same host |
 | P3 | polygon rasteriser, arbitrary angles, kerf and margin             | L shapes pack with verified clearance |
 | P4 | penetration map + guided local search separation, squeeze loop     | utilisation beats the P3 BLF baseline on a fixed suite |

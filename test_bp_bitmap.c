@@ -1,52 +1,8 @@
-#define _POSIX_C_SOURCE 200809L
+#include "test_support.h"
 
 #include "bp_bitmap.h"
 
-#include <signal.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-#define CHECK(condition) s_check((condition), #condition, __LINE__)
-
-/* Reports the first failed expectation and stops, so output stays readable. */
-static void
-s_check(int ok, const char *text, int line)
-{
-    if (!ok) {
-        (void) fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, line, text);
-        exit(1);
-    }
-}
-
-/*
- * Runs body in a child process and requires it to die on a contract abort.
- * Contract violations are fatal by design, so they can only be tested from a
- * process we are willing to lose.
- */
-static void
-s_expect_abort(void (*body)(void), const char *name)
-{
-    pid_t pid = fork();
-    int status = 0;
-
-    CHECK(pid >= 0);
-    if (pid == 0) {
-        /* The contract message is expected here and would only be noise. */
-        FILE *silenced = freopen("/dev/null", "w", stderr);
-
-        (void) silenced;
-        body();
-        _exit(0);
-    }
-    CHECK(waitpid(pid, &status, 0) == pid);
-    if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGABRT) {
-        (void) fprintf(stderr, "FAIL %s did not abort\n", name);
-        exit(1);
-    }
-}
 
 /* Stride must round up to whole words, exactly at the 64-cell boundaries. */
 static void
@@ -195,6 +151,54 @@ s_test_span_queries(void)
             CHECK(bp_bitmap_span_count(&bitmap, 0U, x, length) == expected);
             CHECK(bp_bitmap_span_occupied(&bitmap, 0U, x, length)
                 == (expected > 0U));
+        }
+    }
+}
+
+/*
+ * The jump scan depends on finding the rightmost blocker, so this is checked
+ * against a backwards cell-by-cell reference over every span of a row.
+ */
+static void
+s_test_span_last_occupied(void)
+{
+    uint64_t words[3U];
+    bp_bitmap_t bitmap = bp_bitmap_init((bp_bitmap_init_args_t) {
+        .width_cells = 140U,
+        .height_cells = 1U,
+        .words = words,
+        .word_capacity = sizeof words / sizeof words[0]
+    });
+    uint32_t x;
+    uint32_t length;
+
+    bp_bitmap_set_span(&bitmap, 0U, 7U, 2U);
+    bp_bitmap_set_span(&bitmap, 0U, 63U, 3U);
+    bp_bitmap_set_span(&bitmap, 0U, 128U, 1U);
+
+    for (x = 0U; x < 140U; ++x) {
+        for (length = 1U; length <= 140U - x; ++length) {
+            uint32_t expected = 0U;
+            int expected_found = 0;
+            uint32_t probe = x + length;
+            uint32_t found_at = UINT32_MAX;
+            int found;
+
+            while (probe-- > x) {
+                if (bp_bitmap_get(&bitmap, probe, 0U)) {
+                    expected = probe;
+                    expected_found = 1;
+                    break;
+                }
+            }
+
+            found = bp_bitmap_span_last_occupied(&bitmap, 0U, x, length,
+                &found_at);
+            CHECK(found == expected_found);
+            if (expected_found)
+                CHECK(found_at == expected);
+            else
+                CHECK(found_at == UINT32_MAX);
         }
     }
 }
@@ -417,18 +421,19 @@ main(void)
     s_test_span_across_words();
     s_test_padding_stays_zero();
     s_test_span_queries();
+    s_test_span_last_occupied();
     s_test_clear_span();
     s_test_row_logic();
     s_test_translate_matches_reference();
     s_test_sheet_scale();
 
-    s_expect_abort(s_body_zero_width, "zero width");
-    s_expect_abort(s_body_short_capacity, "short capacity");
-    s_expect_abort(s_body_row_out_of_range, "row out of range");
-    s_expect_abort(s_body_zero_length_span, "zero length span");
-    s_expect_abort(s_body_span_past_width, "span past width");
-    s_expect_abort(s_body_translate_aliases, "translate aliases");
-    s_expect_abort(s_body_translate_stride_mismatch, "translate stride");
+    t_expect_abort(s_body_zero_width, "zero width");
+    t_expect_abort(s_body_short_capacity, "short capacity");
+    t_expect_abort(s_body_row_out_of_range, "row out of range");
+    t_expect_abort(s_body_zero_length_span, "zero length span");
+    t_expect_abort(s_body_span_past_width, "span past width");
+    t_expect_abort(s_body_translate_aliases, "translate aliases");
+    t_expect_abort(s_body_translate_stride_mismatch, "translate stride");
 
     (void) printf("test_bp_bitmap: all checks passed\n");
     return 0;

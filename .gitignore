@@ -1,3 +1,9 @@
 .pixi/
 *.o
 test_bp_bitmap
+test_bp_mask
+test_bp_place
+test_bp_nester
+bp_pack
+*.svg
+bp_bench

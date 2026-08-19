@@ -1,0 +1,15 @@
+# Demo job: a 1200 x 1200 mm plate at 1 mm resolution with 1 mm between parts.
+# Lines are: sheet <w_mm> <h_mm> | cell <mm> | clearance <mm>
+#            rect <id> <quantity> <w_mm> <h_mm> <allow_quarter_turn>
+sheet 1200 1200
+cell 1.0
+clearance 1.0
+
+rect 1  2  600 300 1
+rect 2  4  280 190 1
+rect 3  6  150 150 0
+rect 4  3  420  95 1
+rect 5  8   90  70 1
+rect 6  2  330 240 1
+rect 7 10   60  45 1
+rect 8  1  520 130 1
