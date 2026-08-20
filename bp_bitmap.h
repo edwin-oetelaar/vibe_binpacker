@@ -143,6 +143,15 @@ int
 bp_row_first_set(const uint64_t *row, size_t stride_words, uint32_t *out_x);
 
 /*
+ * Finds the smallest x at or after from_x with a bit set. Returns 1 and
+ * writes it to out_x, or 0 when there is none. Walking a row of feasible
+ * positions is what a scoring layer does with it.
+ */
+int
+bp_row_next_set(const uint64_t *row, size_t stride_words, uint32_t from_x,
+    uint32_t *out_x);
+
+/*
  * dst = complement of src, with the padding past width_cells cleared again.
  * Turning occupancy into free space is the first step of every erosion, and
  * the mask matters: cells beyond the sheet edge must read as not free.

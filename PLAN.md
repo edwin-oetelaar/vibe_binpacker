@@ -227,36 +227,91 @@ Evaluated over a window, this is the *raster penetration map* of Sato et al.
 (2019), also called the Voronoi mountain: the overlap cost at every grid
 position at once, whose global minimum is where the part wants to go.
 
-### 3.8 Search layer
+### 3.8 Search layer, first form: ruin and recreate
 
-The literature is unambiguous about what wins, and it is not a metaheuristic
-over the part order. It is **overlap minimisation**: allow parts to overlap
-temporarily and minimise total penetration, so feasibility becomes an
-objective you can descend rather than a wall you bounce off. See RESEARCH.md
-section 3 for the evidence. Structure, following sparrow (2025):
+The literature's winner is overlap minimisation, and that is still where this
+is going (3.9). What is built first is **ruin and recreate**, because it is the
+natural consumer of the one thing this project has measured itself to be good
+at: producing every feasible position at a height for a tenth to a thirtieth of
+what enumerating them costs otherwise. It also gives overlap minimisation
+something honest to be measured against.
 
-1. **Initialise** with BLF over the complete feasible set (3.3 + 3.6).
-2. **Squeeze**: make the problem infeasible on purpose - add the next part, or
+The loop keeps a feasible layout at all times:
+
+1. **Construct** by placing parts largest first, each at its best-ranked
+   position.
+2. **Ruin**: empty one region of the sheet by lifting out the parts nearest a
+   randomly chosen one.
+3. **Recreate**: put those back, largest first, together with anything still
+   unplaced, ranking positions again.
+4. **Accept** when the result is better; otherwise restore.
+
+Better means more material placed; at equal material a lower used height; at
+equal height a lower centre of mass. All randomness comes from one explicitly
+seeded PRNG, so a run replays from `(input, seed, budget)`.
+
+**Three things had to be right, and two obvious choices were wrong.** All of
+this came out of measurement, not reading:
+
+- *Ruin has to be spatially clustered.* Lifting parts at random scatters small
+  holes that a greedy recreate refills exactly as they were. Measured over
+  5000 rounds: **zero** improvements. Emptying one contiguous region instead
+  gives the recreate something to rearrange.
+- *The recreate has to blink.* A purely greedy recreate is a fixed point even
+  with clustered ruin, for the same reason. Passing over a small random
+  fraction of candidate positions - a "blink" - is what lets the layout drift,
+  and it costs nothing.
+- *The randomness must not go into the insertion order.* Putting parts back in
+  random order lost to plain bottom-left outright, because a big part arriving
+  after the small ones have taken the good corners is simply worse. Greedy
+  order, random ruin, blinked positions.
+- *The objective needs a gradient.* Used height alone only changes when the
+  single topmost part moves, so nearly every rearrangement scores identically
+  and there is nothing to climb. Adding the centre of mass underneath it makes
+  every part that settles lower count for something.
+- *Contact scoring did not earn its default.* Any positive weight overwhelms
+  the left-hand tie-break and turns the rule into "hug whatever you can
+  reach", which placed five fewer parts on an over-subscribed sheet than plain
+  bottom-left. The term is implemented and exposed, and defaults to zero.
+
+Measured against the P3 bottom-left baseline:
+
+| job | baseline | searched | budget |
+| --- | -------- | -------- | ------ |
+| `demo.job` used height | 1134 mm | **1035 mm** | 5 s |
+| `demo.job` used height | 1134 mm | **1022 mm** | 14 s, wider ruin |
+| `dense.job` utilisation | 95.17 % | **95.87 %** | 33 s |
+
+The over-subscribed sheet moves slowly because it starts near the practical
+limit; the gain there is in what gets placed, not in tidiness. The sparsely
+filled `shapes.job` barely moves at all, which is expected: everything already
+fits and there is nothing to win.
+
+### 3.9 Search layer, second form: overlap minimisation
+
+Still to build, and still what the literature says wins. Structure, following
+sparrow (2025):
+
+1. **Squeeze**: make the problem infeasible on purpose - add the next part, or
    shrink the usable region by a fraction of a percent - which forces
    collisions.
-3. **Separate**: resolve those collisions by guided local search. Per colliding
+2. **Separate**: resolve those collisions by guided local search. Per colliding
    pair keep a GLS weight; repeatedly take a colliding part and move it to the
    minimum of its weighted penetration map (3.7); raise weights on collisions
-   that persist, decay them once resolved, so the search is pushed out of local
-   optima instead of oscillating.
-4. **Accept or roll back**. On success the squeezed layout becomes the
-   incumbent; on repeated failure, disrupt by swapping two large parts.
-5. **Compress**: in the last part of the time budget, retry from the best
-   layout with progressively smaller squeeze steps, restoring the incumbent
-   before each attempt so changes stay local.
+   that persist, decay them once resolved.
+3. **Accept or roll back**, disrupting by swapping two large parts when stuck.
+4. **Compress**: retry from the best layout with progressively smaller squeeze
+   steps.
 
-Simple sorting plus multi-start remains the cheap baseline that steps 2-5 must
-beat, and it is what the benchmark reports against.
+The open question this must answer first is a data-structure one. Penetration
+needs per-cell *counts*, not bits, because two parts may cover the same cell -
+and counts give up the property that makes the bitboard fast, namely that
+occupying a 300-cell run costs five word writes rather than three hundred byte
+increments. Section 3.7 assumes prefix sums over counts; whether that beats
+simply rebuilding a bitmap of everything-except-the-moving-part is a
+measurement nobody has taken yet.
 
-All randomness comes from one explicitly seeded PRNG so any run is
-reproducible from `(input, seed, time budget)`.
-
-### 3.9 Objective
+### 3.10 Objective
 
 Primary: maximise placed area / sheet area on a fixed sheet.
 Secondary, and practically important for a workshop: minimise the used
@@ -285,10 +340,10 @@ Modules marked **done** exist and are tested.
 | `bp_bench`     | **done** repeatable benchmark over cell sizes and modes     |
 | `bp_polygon`   | **done** rings, validation, simplicity, bounds, rotation    |
 | `bp_raster`    | **done** conservative fill, clearance growth                |
-| `bp_score`     | candidate scoring functions                                 |
+| `bp_score`     | **done** contact measure and ranked position choice         |
+| `bp_search`    | **done** ruin and recreate with a time budget               |
 | `bp_penetration`| per-row prefix popcount, penetration map queries            |
 | `bp_separate`  | guided local search that resolves overlap                   |
-| `bp_search`    | squeeze/separate/accept outer loop, time budget             |
 
 The erosion path of section 3.3 will slot in behind the existing `bp_place`
 API as a third mode, tested against the same reference scan.
@@ -378,9 +433,10 @@ Each phase ends with tests green and a benchmark number recorded.
 | P1 | rectangles, reference scan + jump scan, 90 deg, SVG out, CLI      | **done**: `pixi run demo` packs 36 parts at 78.5 % with verified 1 mm clearance |
 | P2 | erosion engine, equivalence property test, benchmark              | **done**: equivalent to the reference on 4000 random cases; 11-31x faster than scanning for the complete feasible set, and slower than the jump scan for first-fit, which is recorded rather than hidden |
 | P3 | polygon rasteriser, arbitrary angles, kerf and margin             | **done**: `pixi run demo` packs L shapes, triangles and a frame at free angles, clearance verified from the SVG |
-| P4 | penetration map + guided local search separation, squeeze loop     | utilisation beats the P3 BLF baseline on a fixed suite |
+| P4 | scoring, ruin and recreate, time budget                            | **done**: 8.7 % lower used height on `demo.job` in 5 s, 95.17 to 95.87 % utilisation on `dense.job` |
 | P5 | holes and part-in-part nesting                                    | a part provably placed inside another's hole |
-| P6 | GUI viewer and stepper                                            | can watch a pack being built |
+| P6 | penetration map, guided local search, squeeze loop (3.9)          | beats the ruin-and-recreate result on the same suite |
+| P6b | GUI viewer and stepper                                           | can watch a pack being built |
 | P7 | multiple sheets, remnant tracking, DXF import/export              | end to end from a real DXF |
 
 ## 9. Open questions

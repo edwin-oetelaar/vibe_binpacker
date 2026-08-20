@@ -221,6 +221,32 @@ bp_mask_overlaps(const bp_bitmap_t *sheet, const bp_mask_t *mask, uint32_t x,
     return 0;
 }
 
+/* Frees the mask's cells after proving they are all occupied. */
+void
+bp_mask_erase(bp_bitmap_t *sheet, const bp_mask_t *mask, uint32_t x,
+    uint32_t y)
+{
+    uint32_t row;
+
+    BP_REQUIRE(bp_mask_in_bounds(sheet, mask, x, y));
+
+    for (row = 0U; row < mask->height_cells; ++row) {
+        uint32_t index;
+
+        for (index = mask->row_offsets[row]; index < mask->row_offsets[row + 1U];
+            ++index) {
+            const bp_span_t *span = &mask->spans[index];
+            uint32_t cell;
+
+            for (cell = 0U; cell < span->length_cells; ++cell)
+                BP_REQUIRE(bp_bitmap_get(sheet, x + span->x_cells + cell,
+                    y + row));
+            bp_bitmap_clear_span(sheet, y + row, x + span->x_cells,
+                span->length_cells);
+        }
+    }
+}
+
 /* Occupies the mask's cells on the sheet after proving the placement is free. */
 void
 bp_mask_blit(bp_bitmap_t *sheet, const bp_mask_t *mask, uint32_t x, uint32_t y)

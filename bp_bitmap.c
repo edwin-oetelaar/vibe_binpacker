@@ -439,6 +439,33 @@ bp_row_first_set(const uint64_t *row, size_t stride_words, uint32_t *out_x)
     return 0;
 }
 
+/* Finds the smallest x at or after from_x with a bit set. */
+int
+bp_row_next_set(const uint64_t *row, size_t stride_words, uint32_t from_x,
+    uint32_t *out_x)
+{
+    size_t word = from_x / S_WORD_BITS;
+    uint64_t masked;
+
+    BP_REQUIRE(row);
+    BP_REQUIRE(out_x);
+    BP_REQUIRE(stride_words > 0U);
+
+    if (word >= stride_words)
+        return 0;
+    /* Ignore the bits before from_x in the word it falls in. */
+    masked = row[word] & ~((UINT64_C(1) << (from_x % S_WORD_BITS)) - UINT64_C(1));
+    for (;;) {
+        if (masked != UINT64_C(0)) {
+            *out_x = (uint32_t) (word * S_WORD_BITS) + s_lowest_bit(masked);
+            return 1;
+        }
+        if (++word >= stride_words)
+            return 0;
+        masked = row[word];
+    }
+}
+
 /* dst = complement of src, keeping the padding invariant. */
 void
 bp_row_not(uint64_t *dst, const uint64_t *src, size_t stride_words,

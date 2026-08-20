@@ -5,12 +5,14 @@ LDLIBS ?=
 .PHONY: all test sanitize demo benchmark clean
 
 CORE = bp_bitmap.c bp_mask.c bp_polygon.c bp_raster.c bp_place.c \
-	bp_nester.c bp_svg.c bp_job.c
+	bp_nester.c bp_score.c bp_search.c bp_svg.c bp_job.c
 CORE_HEADERS = bp_bitmap.h bp_mask.h bp_polygon.h bp_raster.h \
-	bp_place.h bp_nester.h bp_svg.h bp_job.h bp_contract.h
+	bp_place.h bp_nester.h bp_score.h bp_search.h \
+	bp_svg.h bp_job.h bp_contract.h
 
 all: test_bp_bitmap test_bp_mask test_bp_polygon test_bp_raster \
-	test_bp_place test_bp_nester bp_pack bp_bench
+	test_bp_place test_bp_nester test_bp_score test_bp_search \
+	bp_pack bp_bench
 
 test_bp_bitmap: $(CORE) $(CORE_HEADERS) test_bp_bitmap.c
 	$(CC) $(CFLAGS) $(CORE) test_bp_bitmap.c -o $@ $(LDLIBS) -lm
@@ -29,6 +31,12 @@ test_bp_place: $(CORE) $(CORE_HEADERS) test_bp_place.c
 
 test_bp_nester: $(CORE) $(CORE_HEADERS) test_bp_nester.c
 	$(CC) $(CFLAGS) $(CORE) test_bp_nester.c -o $@ $(LDLIBS) -lm
+
+test_bp_score: $(CORE) $(CORE_HEADERS) test_bp_score.c
+	$(CC) $(CFLAGS) $(CORE) test_bp_score.c -o $@ $(LDLIBS) -lm
+
+test_bp_search: $(CORE) $(CORE_HEADERS) test_bp_search.c
+	$(CC) $(CFLAGS) $(CORE) test_bp_search.c -o $@ $(LDLIBS) -lm
 
 bp_pack: $(CORE) $(CORE_HEADERS) bp_pack.c
 	$(CC) $(CFLAGS) $(CORE) bp_pack.c -o $@ $(LDLIBS) -lm
@@ -49,6 +57,8 @@ demo: bp_pack
 	python3 tools/check_layout.py shapes.svg --clearance 1.0
 	./bp_pack --svg nested_hole.svg jobs/nested_hole.job
 	python3 tools/check_layout.py nested_hole.svg --clearance 1.0
+	./bp_pack --search 400 --svg searched.svg jobs/dense.job || true
+	python3 tools/check_layout.py searched.svg --clearance 1.0
 
 test: all
 	./test_bp_bitmap
@@ -57,6 +67,8 @@ test: all
 	./test_bp_raster
 	./test_bp_place
 	./test_bp_nester
+	./test_bp_score
+	./test_bp_search
 
 # Sanitizers are mandatory for changes to indexing, shifting or masking.
 sanitize:
@@ -68,5 +80,5 @@ sanitize:
 
 clean:
 	rm -f test_bp_bitmap test_bp_mask test_bp_polygon test_bp_raster \
-		test_bp_place test_bp_nester \
-		bp_pack bp_bench demo.svg shapes.svg nested_hole.svg
+		test_bp_place test_bp_nester test_bp_score test_bp_search \
+		bp_pack bp_bench demo.svg shapes.svg nested_hole.svg searched.svg

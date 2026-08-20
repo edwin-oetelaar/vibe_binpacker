@@ -6,6 +6,8 @@ test_bp_polygon
 test_bp_raster
 test_bp_place
 test_bp_nester
+test_bp_score
+test_bp_search
 bp_pack
 *.svg
 bp_bench

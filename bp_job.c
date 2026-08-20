@@ -742,13 +742,20 @@ bp_job_load(const char *path, double cell_size_override_mm)
     job->owned_parts = calloc(instances, sizeof *job->owned_parts);
     job->owned_labels = calloc(instances, sizeof *job->owned_labels);
     job->order = calloc(instances, sizeof *job->order);
+    job->placed = calloc(instances, sizeof *job->placed);
+    job->scratch_placed = calloc(instances, sizeof *job->scratch_placed);
+    job->scratch_best_placed = calloc(instances,
+        sizeof *job->scratch_best_placed);
+    job->scratch_best = calloc(instances, sizeof *job->scratch_best);
     job->placements = calloc(instances, sizeof *job->placements);
     build.masks = calloc(mask_bound, sizeof *build.masks);
     build.slots = calloc(mask_bound, sizeof *build.slots);
     build.orientations = calloc(orientation_bound, sizeof *build.orientations);
 
     if (!job->owned_sheet_words || !job->owned_parts || !job->owned_labels
-        || !job->order || !job->placements || !build.masks || !build.slots
+        || !job->order || !job->placements || !job->placed
+        || !job->scratch_placed || !job->scratch_best_placed
+        || !job->scratch_best || !build.masks || !build.slots
         || !build.orientations) {
         result.status = BP_JOB_OUT_OF_MEMORY;
         goto failed;
@@ -822,6 +829,10 @@ bp_job_destroy(bp_job_t **job)
     free((*job)->owned_parts);
     free((*job)->owned_labels);
     free((*job)->order);
+    free((*job)->placed);
+    free((*job)->scratch_placed);
+    free((*job)->scratch_best_placed);
+    free((*job)->scratch_best);
     free((*job)->scratch_rows);
     free((*job)->placements);
     free(*job);

@@ -6,6 +6,7 @@
 #include "bp_job.h"
 #include "bp_nester.h"
 #include "bp_place.h"
+#include "bp_search.h"
 #include "bp_svg.h"
 
 #include <stdio.h>
@@ -22,6 +23,14 @@ s_usage(void)
         "  --sort input|area|longest   part order (default: area)\n"
         "  --mode reference|jump|erosion   placement search (jump)\n"
         "  --cell <mm>                 override the job's cell size\n"
+        "  --search <iterations>       ruin and recreate instead of one pass\n"
+        "  --time <seconds>            stop the search after this long\n"
+        "  --contact <w>               how many cells of height a perfect\n"
+        "                              fit is worth (default 0)\n"
+        "  --window <rows>             heights ranked above the lowest (1)\n"
+        "  --ruin <parts>              most parts lifted per round (8)\n"
+        "  --blink <rate>              chance a position is passed over "
+        "(0.08)\n"
         "  --svg <path>                write the layout as SVG\n"
         "  --csv                       one machine-readable summary line\n");
     exit(1);
@@ -36,11 +45,20 @@ main(int argc, char **argv)
     const char *job_path = NULL;
     const char *svg_path = NULL;
     double cell_override_mm = 0.0;
+    unsigned long search_iterations = 0U;
+    double time_budget_seconds = 0.0;
+    bp_score_weights_t weights = bp_score_default_weights();
+    uint32_t height_window = 1U;
+    uint32_t max_ruin = 8U;
+    double blink_rate = 0.08;
     int want_csv = 0;
     int argument;
     bp_job_load_result_t loaded;
     bp_job_t *job;
-    bp_nester_solve_result_t result;
+    bp_nester_solve_result_t result = { 0U, 0U, 0U, 0U, 0U, 0U };
+    uint32_t placement_count = 0U;
+    uint32_t iterations_run = 0U;
+    uint32_t improvements = 0U;
     clock_t started;
     double seconds;
     double sheet_area_cells;
@@ -70,6 +88,29 @@ main(int argc, char **argv)
             else if (strcmp(value, "erosion") == 0)
                 mode = BP_PLACE_EROSION;
             else
+                s_usage();
+        } else if (strcmp(item, "--search") == 0 && argument + 1 < argc) {
+            search_iterations = (unsigned long) strtoul(argv[++argument],
+                NULL, 10);
+        } else if (strcmp(item, "--time") == 0 && argument + 1 < argc) {
+            time_budget_seconds = strtod(argv[++argument], NULL);
+            if (!(time_budget_seconds > 0.0))
+                s_usage();
+        } else if (strcmp(item, "--contact") == 0 && argument + 1 < argc) {
+            weights.contact_weight = strtod(argv[++argument], NULL);
+            if (weights.contact_weight < 0.0)
+                s_usage();
+        } else if (strcmp(item, "--window") == 0 && argument + 1 < argc) {
+            height_window = (uint32_t) strtoul(argv[++argument], NULL, 10);
+            if (height_window == 0U)
+                s_usage();
+        } else if (strcmp(item, "--ruin") == 0 && argument + 1 < argc) {
+            max_ruin = (uint32_t) strtoul(argv[++argument], NULL, 10);
+            if (max_ruin == 0U)
+                s_usage();
+        } else if (strcmp(item, "--blink") == 0 && argument + 1 < argc) {
+            blink_rate = strtod(argv[++argument], NULL);
+            if (blink_rate < 0.0 || blink_rate >= 1.0)
                 s_usage();
         } else if (strcmp(item, "--cell") == 0 && argument + 1 < argc) {
             cell_override_mm = strtod(argv[++argument], NULL);
@@ -103,19 +144,64 @@ main(int argc, char **argv)
     job = loaded.job;
 
     started = clock();
-    result = bp_nester_solve((bp_nester_solve_args_t) {
-        .sheet = &job->sheet,
-        .parts = job->parts,
-        .part_count = job->part_count,
-        .sort = sort,
-        .place_mode = mode,
-        .scratch_order = job->order,
-        .scratch_capacity = job->part_count,
-        .scratch_rows = job->scratch_rows,
-        .scratch_row_capacity = job->scratch_row_capacity,
-        .placements = job->placements,
-        .placement_capacity = job->part_count
-    });
+    if (search_iterations > 0U || time_budget_seconds > 0.0) {
+        bp_search_result_t search = bp_search_solve((bp_search_args_t) {
+            .sheet = &job->sheet,
+            .parts = job->parts,
+            .part_count = job->part_count,
+            .weights = weights,
+            .height_window = height_window,
+            .max_positions = 48U,
+            .max_ruin = max_ruin,
+            .blink_rate = blink_rate,
+            .iterations = search_iterations > 0U
+                ? (uint32_t) search_iterations
+                : UINT32_MAX,
+            .time_budget_seconds = time_budget_seconds,
+            .seed = UINT64_C(0x5deece66d),
+            .scratch_order = job->order,
+            .scratch_placed = job->scratch_placed,
+            .scratch_best_placed = job->scratch_best_placed,
+            .scratch_best = job->scratch_best,
+            .scratch_capacity = job->part_count,
+            .scratch_rows = job->scratch_rows,
+            .scratch_row_capacity = job->scratch_row_capacity,
+            .placements = job->placements,
+            .placed = job->placed,
+            .placement_capacity = job->part_count
+        });
+        uint32_t index;
+
+        /* The SVG writer wants a packed list, not one entry per part. */
+        placement_count = 0U;
+        for (index = 0U; index < job->part_count; ++index)
+            if (job->placed[index])
+                job->placements[placement_count++] = job->placements[index];
+
+        result.placed_count = search.placed_count;
+        result.unplaced_count = search.unplaced_count;
+        result.placed_area_cells = search.placed_area_cells;
+        result.used_width_cells = search.used_width_cells;
+        result.used_height_cells = search.used_height_cells;
+        result.candidate_checks = search.iterations_run;
+        iterations_run = search.iterations_run;
+        improvements = search.improvements;
+    } else {
+        result = bp_nester_solve((bp_nester_solve_args_t) {
+            .sheet = &job->sheet,
+            .parts = job->parts,
+            .part_count = job->part_count,
+            .sort = sort,
+            .place_mode = mode,
+            .scratch_order = job->order,
+            .scratch_capacity = job->part_count,
+            .scratch_rows = job->scratch_rows,
+            .scratch_row_capacity = job->scratch_row_capacity,
+            .placements = job->placements,
+            .placement_capacity = job->part_count
+        });
+        placement_count = result.placed_count;
+    }
     seconds = (double) (clock() - started) / CLOCKS_PER_SEC;
 
     sheet_area_cells = (double) job->sheet_width_cells
@@ -147,8 +233,13 @@ main(int argc, char **argv)
         (void) printf("used box     %.1f x %.1f mm\n",
             result.used_width_cells * job->cell_size_mm,
             result.used_height_cells * job->cell_size_mm);
-        (void) printf("candidates   %llu positions tested in %.3f s\n",
-            (unsigned long long) result.candidate_checks, seconds);
+        if (iterations_run > 0U)
+            (void) printf("search       %u rounds, %u improvements, "
+                "%.3f s\n", (unsigned) iterations_run,
+                (unsigned) improvements, seconds);
+        else
+            (void) printf("candidates   %llu positions tested in %.3f s\n",
+                (unsigned long long) result.candidate_checks, seconds);
     }
 
     exit_code = result.unplaced_count == 0U ? 0 : 2;
@@ -170,7 +261,7 @@ main(int argc, char **argv)
             .parts = job->parts,
             .part_count = job->part_count,
             .placements = job->placements,
-            .placement_count = result.placed_count,
+            .placement_count = placement_count,
             .labels = job->labels,
             .draw_labels = 1
         });

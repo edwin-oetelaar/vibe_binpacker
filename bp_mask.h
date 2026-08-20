@@ -97,6 +97,15 @@ bp_mask_overlaps(const bp_bitmap_t *sheet, const bp_mask_t *mask, uint32_t x,
     uint32_t y);
 
 /*
+ * Frees the mask's cells on the sheet after proving every one of them is
+ * occupied. Lifting a part off the sheet is only safe because placements
+ * never overlap: the cells can belong to nothing else.
+ */
+void
+bp_mask_erase(bp_bitmap_t *sheet, const bp_mask_t *mask, uint32_t x,
+    uint32_t y);
+
+/*
  * Occupies the mask's cells on the sheet at (x, y) after proving the
  * placement is in bounds and free. Overlap here is a caller defect, because
  * the search is what decides where a part may go.

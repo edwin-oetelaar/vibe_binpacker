@@ -41,17 +41,23 @@ per span of the part gives the whole row of legal positions in a handful of
 set. That second answer is the one a continuous method cannot give at all, and
 it is what a scoring layer needs. `pixi run benchmark` reports both.
 
-What exists today is **bottom-left-fill**: each part goes to the lowest, then
-leftmost free spot. That is the published baseline and the standard
-initialiser, but on its own it plateaus. What comes next, and where the
-material savings are, is the winning family from the literature: not a
-metaheuristic over part order, but **overlap minimisation**. Parts are allowed
-to overlap temporarily and a guided local search drives total penetration back
-to zero, wrapped in a squeeze loop that deliberately makes the layout
-infeasible and then repairs it. The same bitboard serves that directly - a
-per-row prefix popcount answers "how much does this part overlap here" in one
-subtraction per row span, which is the raster penetration map of Sato et al.
-(2019).
+The construction heuristic is **bottom-left-fill**: each part goes to the
+lowest, then leftmost free spot. It runs from a scanning search rather than
+from the erosion, because for merely finding the *first* free spot a scan that
+usually dies on its first word beats computing a whole row of answers.
+
+On top of it sits **ruin and recreate**: empty one region of the sheet, put
+those parts back together with anything unplaced, keep the result if it is
+better. Three details decide whether that works at all, and each was settled
+by measurement rather than by reading - the ruin has to clear a contiguous
+region rather than scattered parts, the recreate has to pass over a small
+random fraction of candidate positions, and the randomness must stay out of
+the insertion order. [PLAN.md](PLAN.md) section 3.8 has the numbers, including
+for the choices that turned out worse.
+
+Still ahead is the family the literature actually favours: **overlap
+minimisation**, where parts may overlap temporarily and a guided local search
+drives total penetration back to zero inside a squeeze loop.
 
 ## Try it
 
@@ -67,6 +73,8 @@ writes an SVG of each:
   a five-sided part offered at every 45 degrees.
 - [jobs/nested_hole.job](jobs/nested_hole.job) - a frame and a square that can
   only go inside the frame's hole.
+- [jobs/dense.job](jobs/dense.job) - more parts than fit, packed with the
+  search rather than a single pass.
 
 Each result is then re-checked with
 [tools/check_layout.py](tools/check_layout.py), which reads the SVG back and
@@ -113,6 +121,8 @@ Built and tested:
     bp_place.[ch]     placement search in three modes, and every feasible
                       position at a height
     bp_nester.[ch]    sequence decoder, bottom-left-fill
+    bp_score.[ch]     contact measure and ranked position choice
+    bp_search.[ch]    ruin and recreate with a time budget
     bp_job.[ch]       job file loading and mask construction
     bp_svg.[ch]       solution to SVG
     bp_pack.c         CLI
@@ -123,7 +133,6 @@ Still to come:
 
     bp_penetration.[ch] prefix popcount, penetration map
     bp_separate.[ch]  guided local search over overlap
-    bp_search.[ch]    squeeze / separate / accept outer loop
     gui/              cimgui (the C API for Dear ImGui) + sokol; last phase
 
 ## Build
@@ -139,6 +148,16 @@ pixi run test-sanitize
 ```
 
 The other tasks are `build`, `demo`, `benchmark` and `clean`.
+
+To search rather than make a single pass, give `bp_pack` a budget:
+
+```sh
+./bp_pack --time 10 --svg out.svg jobs/dense.job
+```
+
+`--search <rounds>` bounds it by rounds instead. On `jobs/demo.job` five
+seconds takes the used height from 1134 mm down to 1035 mm, which is 99 mm
+more of the plate left as one clean strip.
 
 Compiler flags are fixed at `-std=c11 -Wall -Wextra -Werror -pedantic`, with
 AddressSanitizer and UndefinedBehaviorSanitizer runs required for any change

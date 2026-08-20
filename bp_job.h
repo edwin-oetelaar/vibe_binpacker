@@ -47,6 +47,11 @@ typedef struct {
     /* Row scratch sized for BP_PLACE_EROSION on this job's sheet. */
     uint64_t *scratch_rows;
     size_t scratch_row_capacity;
+    /* Bookkeeping bp_search needs; unused by the plain nester. */
+    uint8_t *placed;
+    uint8_t *scratch_placed;
+    uint8_t *scratch_best_placed;
+    bp_placement_t *scratch_best;
     bp_placement_t *placements;
 
     /* Owned storage. Nothing outside bp_job.c should touch these. */
