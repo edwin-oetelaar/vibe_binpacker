@@ -8,8 +8,10 @@ The core is deterministic C11 with no allocation in the hot path. Python does
 tooling (DXF/SVG import, reporting, plots) and a separate binary does the GUI.
 The solver itself never needs either.
 
-Status: **phases P0 and P1 done** - there is a working rectangle nester with
-a CLI and SVG output. The search layer that makes it good is still ahead.
+Status: **phases P0 to P3 done** - there is a working nester for arbitrary
+simple polygons, with holes, free rotation and a guaranteed gap between parts,
+plus a CLI and SVG output. The search layer that makes it *good* is still
+ahead.
 [PLAN.md](PLAN.md) has the design, the algorithm and the phased roadmap;
 [RESEARCH.md](RESEARCH.md) has the literature review that shaped them.
 
@@ -26,7 +28,9 @@ price is a 1 mm quantisation, which is below the laser kerf.
 Clearance works the way the literature does it: each part carries two masks,
 the true geometry and a copy grown by the requested gap. The search tests the
 grown one and the sheet records the true one, which leaves exactly the gap you
-asked for rather than twice it.
+asked for rather than twice it. The growth is measured between cell *squares*
+rather than cell centres, because two cells a diagonal step apart have centres
+sqrt(2) apart but squares that touch at a corner.
 
 What exists today is **bottom-left-fill**: each part goes to the lowest, then
 leftmost free spot. That is the published baseline and the standard
@@ -46,11 +50,20 @@ subtraction per row span, which is the raster penetration map of Sato et al.
 pixi run demo
 ```
 
-That packs [jobs/demo.job](jobs/demo.job) - 36 rectangles on a 1200 x 1200 mm
-plate with 1 mm between parts - writes `demo.svg`, and then re-checks the
-result with [tools/check_layout.py](tools/check_layout.py), which reads the
-SVG back and verifies independently that nothing overlaps, nothing leaves the
-sheet and the clearance holds.
+That packs three jobs onto a 1200 x 1200 mm plate with 1 mm between parts and
+writes an SVG of each:
+
+- [jobs/demo.job](jobs/demo.job) - 36 rectangles.
+- [jobs/shapes.job](jobs/shapes.job) - L shapes, triangles, a square frame and
+  a five-sided part offered at every 45 degrees.
+- [jobs/nested_hole.job](jobs/nested_hole.job) - a frame and a square that can
+  only go inside the frame's hole.
+
+Each result is then re-checked with
+[tools/check_layout.py](tools/check_layout.py), which reads the SVG back and
+verifies independently that nothing overlaps, nothing leaves the sheet and the
+clearance holds. That check is not decoration: it is what caught the clearance
+being measured between cell centres instead of cell squares.
 
 ```sh
 pixi run benchmark
@@ -59,12 +72,24 @@ pixi run benchmark
 sweeps cell size and placement mode and prints CSV.
 
 The job format is line based on purpose, so the solver needs no parser
-dependency:
+dependency. DXF and SVG import belong in Python tooling that writes these
+files.
 
     sheet 1200 1200        # plate size in mm
     cell 1.0               # grid resolution in mm
     clearance 1.0          # gap to leave between parts, in mm
+
     rect 1 2 600 300 1     # id, quantity, width, height, may turn 90 degrees
+
+    poly 2 4 every:90      # id, quantity, angles: a list like 0,90,180 or
+                           # every:<step> for a full turn in equal steps
+    ring 6  0 0  300 0  300 80  120 80  120 200  0 200
+    ring 4  40 40  80 40  80 80  40 80     # further rings are holes
+
+A `rect` line is sugar for a four-vertex polygon, so there is only one
+geometry path. Ring winding does not matter: filling uses the even-odd rule,
+because real CAD input arrives wound arbitrarily and guessing at it would be
+worse than ignoring it.
 
 ## Layout
 
@@ -73,6 +98,8 @@ Built and tested:
     bp_contract.h     fail-fast contract macro
     bp_bitmap.[ch]    bitboard rows, shifts, span queries, counts
     bp_mask.[ch]      part footprint as row spans, blit, overlap
+    bp_polygon.[ch]   rings, validation, simplicity, bounds, rotation
+    bp_raster.[ch]    conservative fill, growth for clearance
     bp_place.[ch]     bottom-left query: reference scan and jump scan
     bp_nester.[ch]    sequence decoder, bottom-left-fill
     bp_job.[ch]       job file loading and mask construction
@@ -83,8 +110,6 @@ Built and tested:
 
 Still to come:
 
-    bp_polygon.[ch]   rings, validation, transforms
-    bp_raster.[ch]    conservative scanline fill, dilation
     bp_penetration.[ch] prefix popcount, penetration map
     bp_separate.[ch]  guided local search over overlap
     bp_search.[ch]    squeeze / separate / accept outer loop

@@ -65,6 +65,13 @@ bp_mask_t
 bp_mask_rectangle(bp_mask_rectangle_args_t args);
 
 /*
+ * Counts the spans an occupancy bitmap will produce, so a caller can size its
+ * span buffer before converting. Cheap enough to run before every conversion.
+ */
+uint32_t
+bp_mask_count_spans(const bp_bitmap_t *source);
+
+/*
  * Builds a mask from an occupancy bitmap, which is how the polygon rasteriser
  * will feed this module. The source bounding box must already be tight and
  * the source must have at least one occupied cell.

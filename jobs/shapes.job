@@ -1,0 +1,30 @@
+# Irregular parts on a 1200 x 1200 mm plate with 1 mm between them.
+#
+#   poly <id> <quantity> <angles>   angles: list like 0,90 or every:<step>
+#   ring <vertex-count> <x> <y> ...  first ring is the outline, rest are holes
+#
+sheet 1200 1200
+cell 1.0
+clearance 1.0
+
+# An L shape, offered at all four quarter turns.
+poly 1 4 every:90
+ring 6  0 0  300 0  300 80  120 80  120 200  0 200
+
+# A triangle, upright or upside down.
+poly 2 5 0,180
+ring 3  0 0  220 0  110 190
+
+# A square frame. Its hole is ordinary free space, so anything small enough
+# may end up cut from inside it.
+poly 3 2 0
+ring 4  0 0  200 0  200 200  0 200
+ring 4  60 60  140 60  140 140  60 140
+
+# A part at an angle no axis-aligned packer could use.
+poly 4 3 every:45
+ring 5  0 0  180 0  180 60  90 130  0 60
+
+# Plain rectangles still work; they are polygons underneath.
+rect 5  6  140 90 1
+rect 6 10   70 55 1

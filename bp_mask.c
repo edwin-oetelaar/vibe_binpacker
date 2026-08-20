@@ -100,6 +100,30 @@ bp_mask_rectangle(bp_mask_rectangle_args_t args)
     return mask;
 }
 
+/* Counts the spans an occupancy bitmap will produce. */
+uint32_t
+bp_mask_count_spans(const bp_bitmap_t *source)
+{
+    uint32_t row;
+    uint32_t count = 0U;
+
+    BP_REQUIRE(source);
+    for (row = 0U; row < source->height_cells; ++row) {
+        uint32_t x = 0U;
+
+        while (x < source->width_cells) {
+            if (!bp_bitmap_get(source, x, row)) {
+                ++x;
+                continue;
+            }
+            ++count;
+            while (x < source->width_cells && bp_bitmap_get(source, x, row))
+                ++x;
+        }
+    }
+    return count;
+}
+
 /*
  * Converts an occupancy bitmap into row spans. This is the seam the polygon
  * rasteriser will plug into: it produces cells, this produces the spans every

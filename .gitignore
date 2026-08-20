@@ -2,6 +2,8 @@
 *.o
 test_bp_bitmap
 test_bp_mask
+test_bp_polygon
+test_bp_raster
 test_bp_place
 test_bp_nester
 bp_pack

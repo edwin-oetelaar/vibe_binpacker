@@ -279,6 +279,22 @@ calls inflation. Two details:
 sparrow exposes exactly this as a configurable "minimum item separation"
 parameter, which confirms it is the industry-standard formulation.
 
+There is a third detail the literature glosses over, and it cost a real bug
+here. On a grid, the clearance has to be measured between **cell squares, not
+cell centres**. Two cells one step apart diagonally have centres sqrt(2)
+apart, so a disc-shaped structuring element sized by centre distance happily
+allows them - but their squares meet at a corner, so the material distance is
+zero and the parts touch. The correct structuring element includes every
+offset with
+
+    max(0, |dx| - 1)^2 + max(0, |dy| - 1)^2 < clearance^2
+
+which for a clearance of one or two cells is simply a square: at that size a
+diagonal step buys no real distance at all. Rounding only starts to pay from
+three cells up. The end-to-end check in `tools/check_layout.py`, which reads
+the output back and measures the gaps itself, is what caught this; no unit
+test written against the wrong idea would have.
+
 ## 9. What to build, concretely
 
 Revised from PLAN.md, in dependency order:

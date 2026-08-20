@@ -4,23 +4,31 @@ LDLIBS ?=
 
 .PHONY: all test sanitize demo benchmark clean
 
-CORE = bp_bitmap.c bp_mask.c bp_place.c bp_nester.c bp_svg.c bp_job.c
-CORE_HEADERS = bp_bitmap.h bp_mask.h bp_place.h bp_nester.h \
-	bp_svg.h bp_job.h bp_contract.h
+CORE = bp_bitmap.c bp_mask.c bp_polygon.c bp_raster.c bp_place.c \
+	bp_nester.c bp_svg.c bp_job.c
+CORE_HEADERS = bp_bitmap.h bp_mask.h bp_polygon.h bp_raster.h \
+	bp_place.h bp_nester.h bp_svg.h bp_job.h bp_contract.h
 
-all: test_bp_bitmap test_bp_mask test_bp_place test_bp_nester bp_pack bp_bench
+all: test_bp_bitmap test_bp_mask test_bp_polygon test_bp_raster \
+	test_bp_place test_bp_nester bp_pack bp_bench
 
 test_bp_bitmap: $(CORE) $(CORE_HEADERS) test_bp_bitmap.c
-	$(CC) $(CFLAGS) $(CORE) test_bp_bitmap.c -o $@ $(LDLIBS)
+	$(CC) $(CFLAGS) $(CORE) test_bp_bitmap.c -o $@ $(LDLIBS) -lm
 
 test_bp_mask: $(CORE) $(CORE_HEADERS) test_bp_mask.c
-	$(CC) $(CFLAGS) $(CORE) test_bp_mask.c -o $@ $(LDLIBS)
+	$(CC) $(CFLAGS) $(CORE) test_bp_mask.c -o $@ $(LDLIBS) -lm
+
+test_bp_polygon: $(CORE) $(CORE_HEADERS) test_bp_polygon.c
+	$(CC) $(CFLAGS) $(CORE) test_bp_polygon.c -o $@ $(LDLIBS) -lm
+
+test_bp_raster: $(CORE) $(CORE_HEADERS) test_bp_raster.c
+	$(CC) $(CFLAGS) $(CORE) test_bp_raster.c -o $@ $(LDLIBS) -lm
 
 test_bp_place: $(CORE) $(CORE_HEADERS) test_bp_place.c
-	$(CC) $(CFLAGS) $(CORE) test_bp_place.c -o $@ $(LDLIBS)
+	$(CC) $(CFLAGS) $(CORE) test_bp_place.c -o $@ $(LDLIBS) -lm
 
 test_bp_nester: $(CORE) $(CORE_HEADERS) test_bp_nester.c
-	$(CC) $(CFLAGS) $(CORE) test_bp_nester.c -o $@ $(LDLIBS)
+	$(CC) $(CFLAGS) $(CORE) test_bp_nester.c -o $@ $(LDLIBS) -lm
 
 bp_pack: $(CORE) $(CORE_HEADERS) bp_pack.c
 	$(CC) $(CFLAGS) $(CORE) bp_pack.c -o $@ $(LDLIBS) -lm
@@ -31,15 +39,22 @@ bp_bench: $(CORE) $(CORE_HEADERS) bp_bench.c
 benchmark: bp_bench
 	./bp_bench jobs/demo.job
 
-# The Python check re-verifies the layout from the SVG alone, so it does not
-# depend on the solver's own assertions being right.
+# The Python check re-verifies each layout from the SVG alone, so it does not
+# depend on the solver's own assertions being right. It is what caught the
+# clearance being measured between cell centres instead of cell squares.
 demo: bp_pack
 	./bp_pack --svg demo.svg jobs/demo.job
 	python3 tools/check_layout.py demo.svg --clearance 1.0
+	./bp_pack --svg shapes.svg jobs/shapes.job
+	python3 tools/check_layout.py shapes.svg --clearance 1.0
+	./bp_pack --svg nested_hole.svg jobs/nested_hole.job
+	python3 tools/check_layout.py nested_hole.svg --clearance 1.0
 
 test: all
 	./test_bp_bitmap
 	./test_bp_mask
+	./test_bp_polygon
+	./test_bp_raster
 	./test_bp_place
 	./test_bp_nester
 
@@ -52,5 +67,6 @@ sanitize:
 		test
 
 clean:
-	rm -f test_bp_bitmap test_bp_mask test_bp_place test_bp_nester \
-		bp_pack bp_bench demo.svg
+	rm -f test_bp_bitmap test_bp_mask test_bp_polygon test_bp_raster \
+		test_bp_place test_bp_nester \
+		bp_pack bp_bench demo.svg shapes.svg nested_hole.svg

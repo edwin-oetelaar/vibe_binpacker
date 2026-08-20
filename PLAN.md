@@ -260,8 +260,8 @@ Modules marked **done** exist and are tested.
 | `bp_svg`       | **done** solution to SVG, for eyeballing without a GUI      |
 | `bp_pack`      | **done** CLI front end                                      |
 | `bp_bench`     | **done** repeatable benchmark over cell sizes and modes     |
-| `bp_polygon`   | rings, validation, transform, area, winding                 |
-| `bp_raster`    | conservative scanline fill, hole clearing, dilation         |
+| `bp_polygon`   | **done** rings, validation, simplicity, bounds, rotation    |
+| `bp_raster`    | **done** conservative fill, clearance growth                |
 | `bp_score`     | candidate scoring functions                                 |
 | `bp_penetration`| per-row prefix popcount, penetration map queries            |
 | `bp_separate`  | guided local search that resolves overlap                   |
@@ -275,6 +275,21 @@ jump over all spans of the mask is a bad trade. It cuts candidate positions by
 only 0.4 % over stopping at the first blocking span, and costs about seventy
 times more work per position, because most candidates are rejected by their
 very first span. `bp_place` stops at the first blocker.
+
+A second measurement settles when the erosion path becomes worth building.
+The jump scan is output sensitive, so on rectangles it scales gently, but a
+staircase polygon has one span per row and that cost grows with resolution:
+
+| cell | rectangles (`demo.job`) | irregular parts (`shapes.job`) |
+| ---- | ----------------------- | ------------------------------ |
+| 1.00 mm | 0.007 s | 0.070 s |
+| 0.50 mm | 0.019 s | 0.411 s |
+| 0.25 mm | 0.068 s | 3.34 s |
+
+Roughly 2.8x per halving on rectangles against 8x on polygons, and 50x the
+absolute cost at 0.25 mm. One construction pass is still affordable, but a
+search doing thousands of them at a fine grid is not. That is the case for
+section 3.3.
 
 ## 5. Data and file formats
 
@@ -339,7 +354,7 @@ Each phase ends with tests green and a benchmark number recorded.
 | P0 | pixi env, Makefile, `bp_contract`, `bp_bitmap` + tests            | **done**: `pixi run test` and `pixi run test-sanitize` green |
 | P1 | rectangles, reference scan + jump scan, 90 deg, SVG out, CLI      | **done**: `pixi run demo` packs 36 parts at 78.5 % with verified 1 mm clearance |
 | P2 | erosion engine, equivalence property test, benchmark              | measured speedup vs P1 on the same host |
-| P3 | polygon rasteriser, arbitrary angles, kerf and margin             | L shapes pack with verified clearance |
+| P3 | polygon rasteriser, arbitrary angles, kerf and margin             | **done**: `pixi run demo` packs L shapes, triangles and a frame at free angles, clearance verified from the SVG |
 | P4 | penetration map + guided local search separation, squeeze loop     | utilisation beats the P3 BLF baseline on a fixed suite |
 | P5 | holes and part-in-part nesting                                    | a part provably placed inside another's hole |
 | P6 | GUI viewer and stepper                                            | can watch a pack being built |
