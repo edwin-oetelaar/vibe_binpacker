@@ -69,6 +69,9 @@ typedef struct {
     bp_place_mode_t place_mode;
     uint32_t *scratch_order;
     size_t scratch_capacity;
+    /* Row scratch for BP_PLACE_EROSION; see bp_place_scratch_words. */
+    uint64_t *scratch_rows;
+    size_t scratch_row_capacity;
     bp_placement_t *placements;
     size_t placement_capacity;
 } bp_nester_solve_args_t;

@@ -352,8 +352,8 @@ static const uint32_t s_workload[S_MAX_PARTS][2] = {
 };
 
 /*
- * Runs the fixed workload in both modes. The two must agree placement for
- * placement: the jump scan exists to be faster, not to be different.
+ * Runs the fixed workload in all three modes. They must agree placement for
+ * placement: the fast paths exist to be faster, not to be different.
  */
 static void
 s_test_workload_modes_agree(void)
@@ -365,8 +365,11 @@ s_test_workload_modes_agree(void)
     uint32_t order[S_MAX_PARTS];
     bp_placement_t reference_placements[S_MAX_PARTS];
     bp_placement_t jump_placements[S_MAX_PARTS];
+    bp_placement_t erosion_placements[S_MAX_PARTS];
+    uint64_t scratch[64];
     bp_nester_solve_result_t reference;
     bp_nester_solve_result_t jump;
+    bp_nester_solve_result_t erosion;
     uint32_t index;
 
     sheet = bp_bitmap_init((bp_bitmap_init_args_t) {
@@ -401,7 +404,25 @@ s_test_workload_modes_agree(void)
         .placements = jump_placements,
         .placement_capacity = S_MAX_PARTS
     });
+    CHECK(bp_place_scratch_words(&sheet) <= sizeof scratch / sizeof scratch[0]);
+    erosion = bp_nester_solve((bp_nester_solve_args_t) {
+        .sheet = &sheet,
+        .parts = parts,
+        .part_count = S_MAX_PARTS,
+        .sort = BP_NEST_SORT_AREA_DESCENDING,
+        .place_mode = BP_PLACE_EROSION,
+        .scratch_order = order,
+        .scratch_capacity = S_MAX_PARTS,
+        .scratch_rows = scratch,
+        .scratch_row_capacity = sizeof scratch / sizeof scratch[0],
+        .placements = erosion_placements,
+        .placement_capacity = S_MAX_PARTS
+    });
 
+    CHECK(erosion.placed_count == reference.placed_count);
+    CHECK(erosion.placed_area_cells == reference.placed_area_cells);
+    CHECK(erosion.used_width_cells == reference.used_width_cells);
+    CHECK(erosion.used_height_cells == reference.used_height_cells);
     CHECK(jump.placed_count == reference.placed_count);
     CHECK(jump.unplaced_count == reference.unplaced_count);
     CHECK(jump.placed_area_cells == reference.placed_area_cells);
@@ -415,6 +436,14 @@ s_test_workload_modes_agree(void)
         CHECK(jump_placements[index].x_cells
             == reference_placements[index].x_cells);
         CHECK(jump_placements[index].y_cells
+            == reference_placements[index].y_cells);
+        CHECK(erosion_placements[index].part_id
+            == reference_placements[index].part_id);
+        CHECK(erosion_placements[index].orientation
+            == reference_placements[index].orientation);
+        CHECK(erosion_placements[index].x_cells
+            == reference_placements[index].x_cells);
+        CHECK(erosion_placements[index].y_cells
             == reference_placements[index].y_cells);
     }
     CHECK(jump.candidate_checks < reference.candidate_checks);

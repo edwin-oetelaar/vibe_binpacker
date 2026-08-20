@@ -11,7 +11,7 @@ The solver itself never needs either.
 Status: **phases P0 to P3 done** - there is a working nester for arbitrary
 simple polygons, with holes, free rotation and a guaranteed gap between parts,
 plus a CLI and SVG output. The search layer that makes it *good* is still
-ahead.
+ahead, but the primitive it needs is in place.
 [PLAN.md](PLAN.md) has the design, the algorithm and the phased roadmap;
 [RESEARCH.md](RESEARCH.md) has the literature review that shaped them.
 
@@ -31,6 +31,15 @@ grown one and the sheet records the true one, which leaves exactly the gap you
 asked for rather than twice it. The growth is measured between cell *squares*
 rather than cell centres, because two cells a diagonal step apart have centres
 sqrt(2) apart but squares that touch at a corner.
+
+Asking where a part fits has two very different answers. For the *first* free
+spot, a scan that skips the stretch a blocker rules out wins, because it
+usually kills a candidate on its first word. For **every** free spot at a
+height, the answer is computed rather than searched: intersecting one run mask
+per span of the part gives the whole row of legal positions in a handful of
+64-bit operations, eleven to thirty times faster than scanning for the same
+set. That second answer is the one a continuous method cannot give at all, and
+it is what a scoring layer needs. `pixi run benchmark` reports both.
 
 What exists today is **bottom-left-fill**: each part goes to the lowest, then
 leftmost free spot. That is the published baseline and the standard
@@ -69,7 +78,8 @@ being measured between cell centres instead of cell squares.
 pixi run benchmark
 ```
 
-sweeps cell size and placement mode and prints CSV.
+sweeps cell size and placement mode and prints CSV, then times enumerating
+every feasible position for a part against doing it by scanning.
 
 The job format is line based on purpose, so the solver needs no parser
 dependency. DXF and SVG import belong in Python tooling that writes these
@@ -100,7 +110,8 @@ Built and tested:
     bp_mask.[ch]      part footprint as row spans, blit, overlap
     bp_polygon.[ch]   rings, validation, simplicity, bounds, rotation
     bp_raster.[ch]    conservative fill, growth for clearance
-    bp_place.[ch]     bottom-left query: reference scan and jump scan
+    bp_place.[ch]     placement search in three modes, and every feasible
+                      position at a height
     bp_nester.[ch]    sequence decoder, bottom-left-fill
     bp_job.[ch]       job file loading and mask construction
     bp_svg.[ch]       solution to SVG

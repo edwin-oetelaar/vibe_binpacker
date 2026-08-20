@@ -39,7 +39,13 @@ s_require_args(const bp_nester_solve_args_t *args)
         || args->sort == BP_NEST_SORT_AREA_DESCENDING
         || args->sort == BP_NEST_SORT_LONGEST_SIDE_DESCENDING);
     BP_REQUIRE(args->place_mode == BP_PLACE_REFERENCE
-        || args->place_mode == BP_PLACE_JUMP);
+        || args->place_mode == BP_PLACE_JUMP
+        || args->place_mode == BP_PLACE_EROSION);
+    if (args->place_mode == BP_PLACE_EROSION) {
+        BP_REQUIRE(args->scratch_rows);
+        BP_REQUIRE(args->scratch_row_capacity
+            >= bp_place_scratch_words(args->sheet));
+    }
     BP_REQUIRE(args->scratch_order);
     BP_REQUIRE(args->scratch_capacity >= args->part_count);
     BP_REQUIRE(args->placements);
@@ -119,8 +125,14 @@ s_place_part(const bp_nester_solve_args_t *args, uint32_t part_index,
 
     for (orientation = 0U; orientation < part->orientation_count;
         ++orientation) {
-        bp_place_result_t candidate = bp_place_bottom_left(args->sheet,
-            part->orientations[orientation].collision, args->place_mode);
+        bp_place_result_t candidate = bp_place_bottom_left(
+            (bp_place_args_t) {
+                .sheet = args->sheet,
+                .mask = part->orientations[orientation].collision,
+                .mode = args->place_mode,
+                .scratch = args->scratch_rows,
+                .scratch_capacity = args->scratch_row_capacity
+            });
 
         *candidate_checks += candidate.candidate_checks;
         if (!candidate.found)

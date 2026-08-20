@@ -44,6 +44,9 @@ typedef struct {
     const uint32_t *labels;
 
     uint32_t *order;
+    /* Row scratch sized for BP_PLACE_EROSION on this job's sheet. */
+    uint64_t *scratch_rows;
+    size_t scratch_row_capacity;
     bp_placement_t *placements;
 
     /* Owned storage. Nothing outside bp_job.c should touch these. */

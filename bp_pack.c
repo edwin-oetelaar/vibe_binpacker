@@ -20,7 +20,7 @@ s_usage(void)
     (void) fprintf(stderr,
         "usage: bp_pack [options] <job-file>\n"
         "  --sort input|area|longest   part order (default: area)\n"
-        "  --mode reference|jump       placement scan (default: jump)\n"
+        "  --mode reference|jump|erosion   placement search (jump)\n"
         "  --cell <mm>                 override the job's cell size\n"
         "  --svg <path>                write the layout as SVG\n"
         "  --csv                       one machine-readable summary line\n");
@@ -67,6 +67,8 @@ main(int argc, char **argv)
                 mode = BP_PLACE_REFERENCE;
             else if (strcmp(value, "jump") == 0)
                 mode = BP_PLACE_JUMP;
+            else if (strcmp(value, "erosion") == 0)
+                mode = BP_PLACE_EROSION;
             else
                 s_usage();
         } else if (strcmp(item, "--cell") == 0 && argument + 1 < argc) {
@@ -109,6 +111,8 @@ main(int argc, char **argv)
         .place_mode = mode,
         .scratch_order = job->order,
         .scratch_capacity = job->part_count,
+        .scratch_rows = job->scratch_rows,
+        .scratch_row_capacity = job->scratch_row_capacity,
         .placements = job->placements,
         .placement_capacity = job->part_count
     });

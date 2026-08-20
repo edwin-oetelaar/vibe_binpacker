@@ -90,7 +90,7 @@ Two cheap fixes to Level 0 that already give one or two orders of magnitude:
 - Skip empty rows using a per-row "skyline" (highest occupied y per column) as
   a pre-filter.
 
-### 3.3 Level 2 - erosion, the real engine
+### 3.3 Level 2 - erosion, for the complete feasible set
 
 The set of *all* feasible positions for a part is a binary morphological
 erosion of `free` by the part mask. Computing that with bitboards costs
@@ -118,18 +118,39 @@ Then the feasible x positions for a part whose bottom row sits at `y` are
 `F(y) == 0` means the part does not fit anywhere at that height. Otherwise
 every set bit is a legal x.
 
-Cost accounting, 300x200 part on the 1200x1200 sheet:
+**Measured outcome, and it is not what this section originally predicted.**
+For merely finding the bottom-left position, erosion *loses* to the jump scan
+of 3.2, on every shape type and every resolution:
 
-- run masks: computed once per (sheet row, distinct span length) and cached,
-  ~1200 rows * a handful of lengths * log2(L) * 19 words - negligible.
-- scan: 1200 heights * 200 part rows * 19 words = 4.6e6 word operations.
+| job, 1 mm | jump | erosion |
+| --------- | ---- | ------- |
+| `demo.job`, rectangles | 0.007 s | 0.078 s |
+| `shapes.job`, irregular | 0.063 s | 0.073 s |
+| over-subscribed sheet, 33 parts rejected | 0.023 s | 0.170 s |
 
-That is milliseconds per part instead of seconds, and it delivers the full
-feasible set, which is what makes real placement *scoring* affordable
-(section 3.6).
+The reason is structural. The jump scan is output sensitive: it usually kills
+a candidate on the candidate's first span, touching one word, and it stops at
+the first position that works. Erosion computes a whole row of positions -
+about log2(L) row operations per span - before it can conclude anything, even
+when the answer is "nothing fits at this height". Early exit as soon as the
+intersection empties helps, and visiting the widest mask row first helps more,
+but a row operation is still two orders of magnitude more work than a word
+test.
 
-Cache invalidation: placing a part only dirties the sheet rows it covers, so
-only those cached run masks are dropped.
+Where erosion wins is the question it was really built for: **every** feasible
+position, at every height, which is what a scoring layer needs and what a
+continuous method cannot produce at all.
+
+| job, complete feasible set | full scan | erosion | ratio |
+| -------------------------- | --------- | ------- | ----- |
+| `demo.job` at 1 mm | 0.122 s | 0.011 s | 11x |
+| `shapes.job` at 1 mm | 0.519 s | 0.017 s | 31x |
+| `shapes.job` at 0.5 mm | 4.450 s | 0.138 s | 32x |
+
+Both produce the identical set, which `bp_bench` checks before reporting the
+times. So the conclusion is a split, not a replacement: `BP_PLACE_JUMP` stays
+the default for construction, and `bp_place_feasible_row` is the primitive the
+search layer of 3.8 is built on.
 
 ### 3.4 Conservative rasterisation
 
@@ -159,8 +180,10 @@ is applied by clearing the outer `m` cells of `free` once.
 
 ### 3.6 From "first fit" to "best fit"
 
-Because erosion hands us every feasible position, the placement rule becomes a
-scoring function over candidates instead of a hard-coded corner rule:
+Because `bp_place_feasible_row` hands us every feasible position at a height
+for a tenth to a thirtieth of what enumerating them costs by scanning, the
+placement rule can become a scoring function over candidates instead of a
+hard-coded corner rule:
 
 - **BL / BLF**: lowest y, then lowest x. The classic baseline.
 - **Contact score**: maximise the length of the part boundary that touches
@@ -254,7 +277,7 @@ Modules marked **done** exist and are tested.
 | `bp_contract`  | **done** `BP_REQUIRE`, fail-fast macro                      |
 | `bp_bitmap`    | **done** bitboard rows, shifts, span queries, counts        |
 | `bp_mask`      | **done** part footprint as row spans, blit, overlap         |
-| `bp_place`     | **done** bottom-left query: reference scan and jump scan    |
+| `bp_place`     | **done** bottom-left query in three modes, plus the complete feasible set per height |
 | `bp_nester`    | **done** sequence decoder, produces a placement list        |
 | `bp_job`       | **done** job file loading, mask construction, ownership     |
 | `bp_svg`       | **done** solution to SVG, for eyeballing without a GUI      |
@@ -353,7 +376,7 @@ Each phase ends with tests green and a benchmark number recorded.
 | ----- | -------------------------------------------------------------- | --------- |
 | P0 | pixi env, Makefile, `bp_contract`, `bp_bitmap` + tests            | **done**: `pixi run test` and `pixi run test-sanitize` green |
 | P1 | rectangles, reference scan + jump scan, 90 deg, SVG out, CLI      | **done**: `pixi run demo` packs 36 parts at 78.5 % with verified 1 mm clearance |
-| P2 | erosion engine, equivalence property test, benchmark              | measured speedup vs P1 on the same host |
+| P2 | erosion engine, equivalence property test, benchmark              | **done**: equivalent to the reference on 4000 random cases; 11-31x faster than scanning for the complete feasible set, and slower than the jump scan for first-fit, which is recorded rather than hidden |
 | P3 | polygon rasteriser, arbitrary angles, kerf and margin             | **done**: `pixi run demo` packs L shapes, triangles and a frame at free angles, clearance verified from the SVG |
 | P4 | penetration map + guided local search separation, squeeze loop     | utilisation beats the P3 BLF baseline on a fixed suite |
 | P5 | holes and part-in-part nesting                                    | a part provably placed inside another's hole |

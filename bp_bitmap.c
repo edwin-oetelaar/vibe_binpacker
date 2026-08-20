@@ -387,6 +387,120 @@ bp_row_or(uint64_t *dst, const uint64_t *a, const uint64_t *b,
         dst[index] = a[index] | b[index];
 }
 
+/* Returns the index of the lowest set bit; the word must not be zero. */
+static uint32_t
+s_lowest_bit(uint64_t value)
+{
+    BP_REQUIRE(value != UINT64_C(0));
+#if defined(__GNUC__) || defined(__clang__)
+    return (uint32_t) __builtin_ctzll(value);
+#else
+    {
+        uint32_t index = 0U;
+
+        while ((value & UINT64_C(1)) == UINT64_C(0)) {
+            value >>= 1;
+            ++index;
+        }
+        return index;
+    }
+#endif
+}
+
+/* Counts the set bits in a row of words. */
+uint32_t
+bp_row_popcount(const uint64_t *row, size_t stride_words)
+{
+    size_t word;
+    uint32_t count = 0U;
+
+    BP_REQUIRE(row);
+    BP_REQUIRE(stride_words > 0U);
+    for (word = 0U; word < stride_words; ++word)
+        count += s_popcount(row[word]);
+    return count;
+}
+
+/* Finds the smallest x with a bit set in a row. */
+int
+bp_row_first_set(const uint64_t *row, size_t stride_words, uint32_t *out_x)
+{
+    size_t word;
+
+    BP_REQUIRE(row);
+    BP_REQUIRE(out_x);
+    BP_REQUIRE(stride_words > 0U);
+
+    for (word = 0U; word < stride_words; ++word)
+        if (row[word] != UINT64_C(0)) {
+            *out_x = (uint32_t) (word * S_WORD_BITS) + s_lowest_bit(row[word]);
+            return 1;
+        }
+    return 0;
+}
+
+/* dst = complement of src, keeping the padding invariant. */
+void
+bp_row_not(uint64_t *dst, const uint64_t *src, size_t stride_words,
+    uint32_t width_cells)
+{
+    size_t index;
+
+    BP_REQUIRE(dst);
+    BP_REQUIRE(src);
+    BP_REQUIRE(width_cells > 0U);
+    BP_REQUIRE(stride_words == bp_bitmap_stride_words(width_cells));
+
+    for (index = 0U; index < stride_words; ++index)
+        dst[index] = ~src[index];
+    s_mask_tail(dst, stride_words, width_cells);
+}
+
+/*
+ * Builds the run mask of a free-space row by repeated doubling.
+ *
+ * Write D_k for the mask of runs of k free cells. Then D_1 is the row itself
+ * and D_{a+b}[x] = D_a[x] AND D_b[x + a], so squaring the current run length
+ * costs one shift and one AND. Walking the bits of length_cells from the top
+ * builds any length in about log2(length) steps: square, and where the bit is
+ * set, extend by one more cell.
+ */
+void
+bp_row_run_mask(uint64_t *dst, const uint64_t *free_row, size_t stride_words,
+    uint32_t width_cells, uint32_t length_cells, uint64_t *scratch)
+{
+    uint32_t run = 1U;
+    uint32_t bit;
+
+    BP_REQUIRE(dst);
+    BP_REQUIRE(free_row);
+    BP_REQUIRE(scratch);
+    BP_REQUIRE(dst != free_row);
+    BP_REQUIRE(scratch != dst);
+    BP_REQUIRE(scratch != free_row);
+    BP_REQUIRE(length_cells > 0U);
+    BP_REQUIRE(stride_words == bp_bitmap_stride_words(width_cells));
+
+    memcpy(dst, free_row, stride_words * sizeof dst[0]);
+    if (length_cells == 1U)
+        return;
+
+    bit = s_highest_bit(length_cells);
+    while (bit-- > 0U) {
+        bp_row_translate(scratch, dst, stride_words, width_cells,
+            -(int32_t) run);
+        bp_row_and(dst, dst, scratch, stride_words);
+        run *= 2U;
+        if ((length_cells >> bit) & 1U) {
+            bp_row_translate(scratch, free_row, stride_words, width_cells,
+                -(int32_t) run);
+            bp_row_and(dst, dst, scratch, stride_words);
+            ++run;
+        }
+    }
+    BP_REQUIRE(run == length_cells);
+}
+
 /*
  * Copies one row with the pattern moved along x. Positive delta moves towards
  * larger x, which is a left shift because bit 0 is the smallest x. Bits pushed

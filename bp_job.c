@@ -1,6 +1,7 @@
 #include "bp_job.h"
 
 #include "bp_contract.h"
+#include "bp_place.h"
 #include "bp_polygon.h"
 #include "bp_raster.h"
 
@@ -760,6 +761,14 @@ bp_job_load(const char *path, double cell_size_override_mm)
         .word_capacity = sheet_words
     });
 
+    job->scratch_row_capacity = bp_place_scratch_words(&job->sheet);
+    job->scratch_rows = calloc(job->scratch_row_capacity,
+        sizeof *job->scratch_rows);
+    if (!job->scratch_rows) {
+        result.status = BP_JOB_OUT_OF_MEMORY;
+        goto failed;
+    }
+
     if (!s_build_masks(job, &source, &build, &workspace)) {
         result.status = BP_JOB_OUT_OF_MEMORY;
         goto failed;
@@ -813,6 +822,7 @@ bp_job_destroy(bp_job_t **job)
     free((*job)->owned_parts);
     free((*job)->owned_labels);
     free((*job)->order);
+    free((*job)->scratch_rows);
     free((*job)->placements);
     free(*job);
     *job = NULL;

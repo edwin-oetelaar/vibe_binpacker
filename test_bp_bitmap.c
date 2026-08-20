@@ -411,6 +411,81 @@ s_body_translate_stride_mismatch(void)
     bp_row_translate(destination, source, 2U, 64U, 1);
 }
 
+/* Complementing a row must leave the padding past the width at zero. */
+static void
+s_test_row_not(void)
+{
+    uint64_t words[2];
+    bp_bitmap_t bitmap = bp_bitmap_init((bp_bitmap_init_args_t) {
+        .width_cells = 100U,
+        .height_cells = 1U,
+        .words = words,
+        .word_capacity = 2U
+    });
+    uint64_t complement[2];
+
+    bp_bitmap_set_span(&bitmap, 0U, 10U, 5U);
+    bp_row_not(complement, bp_bitmap_row_const(&bitmap, 0U), 2U, 100U);
+    CHECK(complement[0] == ~(((UINT64_C(1) << 5U) - 1U) << 10U));
+    /* 100 cells is word 0 full plus 36 bits of word 1; the rest stays clear. */
+    CHECK(complement[1] == (UINT64_C(1) << 36U) - UINT64_C(1));
+}
+
+/*
+ * The run mask is the primitive the erosion scan rests on, so it is compared
+ * against a cell-by-cell reference for every length a row can hold, on a row
+ * with runs that start and end at word boundaries.
+ */
+static void
+s_test_run_mask(void)
+{
+    const uint32_t width_cells = 140U;
+    const size_t stride = 3U;
+    uint64_t words[3];
+    bp_bitmap_t bitmap = bp_bitmap_init((bp_bitmap_init_args_t) {
+        .width_cells = width_cells,
+        .height_cells = 1U,
+        .words = words,
+        .word_capacity = stride
+    });
+    uint64_t free_row[3];
+    uint64_t mask[3];
+    uint64_t scratch[3];
+    bp_bitmap_t view;
+    uint32_t length;
+
+    bp_bitmap_set_span(&bitmap, 0U, 0U, 3U);
+    bp_bitmap_set_span(&bitmap, 0U, 61U, 2U);
+    bp_bitmap_set_span(&bitmap, 0U, 64U, 1U);
+    bp_bitmap_set_span(&bitmap, 0U, 130U, 1U);
+    bp_row_not(free_row, bp_bitmap_row_const(&bitmap, 0U), stride,
+        width_cells);
+
+    view = bp_bitmap_init((bp_bitmap_init_args_t) {
+        .width_cells = width_cells,
+        .height_cells = 1U,
+        .words = mask,
+        .word_capacity = stride
+    });
+
+    for (length = 1U; length <= width_cells; ++length) {
+        uint32_t x;
+
+        bp_row_run_mask(mask, free_row, stride, width_cells, length, scratch);
+        for (x = 0U; x < width_cells; ++x) {
+            int expected = 1;
+            uint32_t probe;
+
+            for (probe = x; probe < x + length; ++probe)
+                if (probe >= width_cells || bp_bitmap_get(&bitmap, probe, 0U)) {
+                    expected = 0;
+                    break;
+                }
+            CHECK(bp_bitmap_get(&view, x, 0U) == expected);
+        }
+    }
+}
+
 /* Runs every test; any failure exits non-zero with the failing expectation. */
 int
 main(void)
@@ -424,6 +499,8 @@ main(void)
     s_test_span_last_occupied();
     s_test_clear_span();
     s_test_row_logic();
+    s_test_row_not();
+    s_test_run_mask();
     s_test_translate_matches_reference();
     s_test_sheet_scale();
 

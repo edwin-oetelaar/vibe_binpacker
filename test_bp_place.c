@@ -6,6 +6,47 @@
 
 #define S_MAX_ROWS 64U
 #define S_MAX_SPANS 512U
+/* Four rows of scratch at the widest sheet these tests use. */
+#define S_MAX_SCRATCH 64U
+
+/*
+ * Calls the placement search in one mode. The erosion needs row scratch, but
+ * only while it runs: the result holds no pointers into it, so a local array
+ * keeps every caller free of the detail.
+ */
+static bp_place_result_t
+s_place(const bp_bitmap_t *sheet, const bp_mask_t *mask, bp_place_mode_t mode)
+{
+    uint64_t scratch[S_MAX_SCRATCH];
+
+    CHECK(bp_place_scratch_words(sheet) <= S_MAX_SCRATCH);
+    return bp_place_bottom_left((bp_place_args_t) {
+        .sheet = sheet,
+        .mask = mask,
+        .mode = mode,
+        .scratch = scratch,
+        .scratch_capacity = S_MAX_SCRATCH
+    });
+}
+
+/* Runs all three modes and requires them to agree exactly. */
+static bp_place_result_t
+s_place_all_modes_agree(const bp_bitmap_t *sheet, const bp_mask_t *mask)
+{
+    bp_place_result_t reference = s_place(sheet, mask, BP_PLACE_REFERENCE);
+    bp_place_result_t jump = s_place(sheet, mask, BP_PLACE_JUMP);
+    bp_place_result_t erosion = s_place(sheet, mask, BP_PLACE_EROSION);
+
+    CHECK(jump.found == reference.found);
+    CHECK(erosion.found == reference.found);
+    if (reference.found) {
+        CHECK(jump.x_cells == reference.x_cells);
+        CHECK(jump.y_cells == reference.y_cells);
+        CHECK(erosion.x_cells == reference.x_cells);
+        CHECK(erosion.y_cells == reference.y_cells);
+    }
+    return reference;
+}
 
 /* Builds a bitmap from an ASCII picture whose first line is the top row. */
 static void
@@ -53,16 +94,11 @@ s_test_empty_sheet(void)
         .spans = spans,
         .span_capacity = S_MAX_SPANS
     });
-    bp_place_result_t reference =
-        bp_place_bottom_left(&sheet, &mask, BP_PLACE_REFERENCE);
-    bp_place_result_t jump = bp_place_bottom_left(&sheet, &mask, BP_PLACE_JUMP);
+    bp_place_result_t placed = s_place_all_modes_agree(&sheet, &mask);
 
-    CHECK(reference.found == 1);
-    CHECK(reference.x_cells == 0U);
-    CHECK(reference.y_cells == 0U);
-    CHECK(jump.found == 1);
-    CHECK(jump.x_cells == 0U);
-    CHECK(jump.y_cells == 0U);
+    CHECK(placed.found == 1);
+    CHECK(placed.x_cells == 0U);
+    CHECK(placed.y_cells == 0U);
 }
 
 /* A mask larger than the sheet is an expected miss, not a contract failure. */
@@ -87,8 +123,7 @@ s_test_oversized_is_not_found(void)
         .span_capacity = S_MAX_SPANS
     });
 
-    CHECK(bp_place_bottom_left(&sheet, &mask, BP_PLACE_REFERENCE).found == 0);
-    CHECK(bp_place_bottom_left(&sheet, &mask, BP_PLACE_JUMP).found == 0);
+    CHECK(s_place_all_modes_agree(&sheet, &mask).found == 0);
 }
 
 /*
@@ -115,8 +150,7 @@ s_test_concave_part_fills_notch(void)
     uint32_t row_offsets[S_MAX_ROWS + 1U];
     bp_span_t spans[S_MAX_SPANS];
     bp_mask_t mask;
-    bp_place_result_t reference;
-    bp_place_result_t jump;
+    bp_place_result_t placed;
 
     s_picture(&sheet, sheet_words, 4U, 10U, 4U, sheet_picture);
     s_picture(&part_source, part_words, 2U, 3U, 2U, part_picture);
@@ -128,15 +162,12 @@ s_test_concave_part_fills_notch(void)
         .span_capacity = S_MAX_SPANS
     });
 
-    reference = bp_place_bottom_left(&sheet, &mask, BP_PLACE_REFERENCE);
-    jump = bp_place_bottom_left(&sheet, &mask, BP_PLACE_JUMP);
+    placed = s_place_all_modes_agree(&sheet, &mask);
 
     /* The 3-wide gap at x 3 is the only opening in the bottom two rows. */
-    CHECK(reference.found == 1);
-    CHECK(reference.x_cells == 3U);
-    CHECK(reference.y_cells == 0U);
-    CHECK(jump.x_cells == reference.x_cells);
-    CHECK(jump.y_cells == reference.y_cells);
+    CHECK(placed.found == 1);
+    CHECK(placed.x_cells == 3U);
+    CHECK(placed.y_cells == 0U);
 }
 
 /*
@@ -165,8 +196,7 @@ s_test_part_nests_inside_hole(void)
     uint32_t row_offsets[S_MAX_ROWS + 1U];
     bp_span_t spans[S_MAX_SPANS];
     bp_mask_t mask;
-    bp_place_result_t reference;
-    bp_place_result_t jump;
+    bp_place_result_t placed;
 
     s_picture(&sheet, sheet_words, 4U, 7U, 4U, sheet_picture);
     s_picture(&part_source, part_words, 2U, 2U, 2U, part_picture);
@@ -178,15 +208,12 @@ s_test_part_nests_inside_hole(void)
         .span_capacity = S_MAX_SPANS
     });
 
-    reference = bp_place_bottom_left(&sheet, &mask, BP_PLACE_REFERENCE);
-    jump = bp_place_bottom_left(&sheet, &mask, BP_PLACE_JUMP);
+    placed = s_place_all_modes_agree(&sheet, &mask);
 
     /* Rows 0 and 3 are blocked, so the lowest free 2x2 is the hole at y 1. */
-    CHECK(reference.found == 1);
-    CHECK(reference.y_cells == 1U);
-    CHECK(reference.x_cells == 1U);
-    CHECK(jump.x_cells == reference.x_cells);
-    CHECK(jump.y_cells == reference.y_cells);
+    CHECK(placed.found == 1);
+    CHECK(placed.y_cells == 1U);
+    CHECK(placed.x_cells == 1U);
 }
 
 /* Fills a sheet with random blockers, reproducibly from the given seed. */
@@ -244,12 +271,56 @@ s_random_mask(bp_bitmap_t *source, uint64_t *words, uint32_t *row_offsets,
 }
 
 /*
- * The property that matters: the jump scan must return exactly what the
- * cell-by-cell reference returns, on every shape and every obstacle pattern.
- * A fast path that is merely usually right would be worse than no fast path.
+ * Checks the complete feasible set, height by height, against a full scan.
+ * This is the property the erosion exists for: not the first position, but
+ * every position, which is what a scoring layer will need.
  */
 static void
-s_test_jump_matches_reference(void)
+s_check_feasible_rows(const bp_bitmap_t *sheet, const bp_mask_t *mask)
+{
+    uint64_t scratch[S_MAX_SCRATCH];
+    uint32_t y;
+
+    CHECK(bp_place_scratch_words(sheet) <= S_MAX_SCRATCH);
+    if (!bp_mask_in_bounds(sheet, mask, 0U, 0U))
+        return;
+
+    for (y = 0U; y <= sheet->height_cells - mask->height_cells; ++y) {
+        bp_place_feasible_result_t feasible = bp_place_feasible_row(
+            (bp_place_feasible_args_t) {
+                .sheet = sheet,
+                .mask = mask,
+                .y_cells = y,
+                .scratch = scratch,
+                .scratch_capacity = S_MAX_SCRATCH
+            });
+        uint32_t expected = 0U;
+        uint32_t x;
+
+        for (x = 0U; x <= sheet->width_cells - mask->width_cells; ++x) {
+            int fits = !bp_mask_overlaps(sheet, mask, x, y);
+            int reported = feasible.positions
+                && (feasible.positions[x / 64U] >> (x % 64U)) & UINT64_C(1);
+
+            CHECK(fits == reported);
+            expected += (uint32_t) fits;
+        }
+        CHECK(feasible.count == expected);
+    }
+}
+
+/*
+ * The property that matters: every fast path must return exactly what the
+ * cell-by-cell reference returns, on every shape and every obstacle pattern.
+ * A fast path that is merely usually right would be worse than no fast path,
+ * so this is the test the reference mode exists for.
+ *
+ * The erosion is also checked against the reference position by position: its
+ * feasible row must contain exactly the positions a full scan accepts, not
+ * merely the first one.
+ */
+static void
+s_test_fast_paths_match_reference(void)
 {
     uint64_t sheet_words[8U * 24U];
     bp_bitmap_t sheet = bp_bitmap_init((bp_bitmap_init_args_t) {
@@ -277,8 +348,8 @@ s_test_jump_matches_reference(void)
         mask = s_random_mask(&part_source, part_words, row_offsets, spans,
             &state);
 
-        reference = bp_place_bottom_left(&sheet, &mask, BP_PLACE_REFERENCE);
-        jump = bp_place_bottom_left(&sheet, &mask, BP_PLACE_JUMP);
+        reference = s_place(&sheet, &mask, BP_PLACE_REFERENCE);
+        jump = s_place(&sheet, &mask, BP_PLACE_JUMP);
 
         CHECK(jump.found == reference.found);
         if (reference.found) {
@@ -290,6 +361,9 @@ s_test_jump_matches_reference(void)
                 jump.y_cells));
             ++found_count;
         }
+        CHECK(s_place(&sheet, &mask, BP_PLACE_EROSION).found
+            == reference.found);
+        s_check_feasible_rows(&sheet, &mask);
         reference_checks += reference.candidate_checks;
         jump_checks += jump.candidate_checks;
     }
@@ -323,7 +397,7 @@ s_body_invalid_mode(void)
         .span_capacity = S_MAX_SPANS
     });
 
-    (void) bp_place_bottom_left(&sheet, &mask, (bp_place_mode_t) 7);
+    (void) s_place(&sheet, &mask, (bp_place_mode_t) 7);
 }
 
 static void
@@ -348,7 +422,7 @@ s_body_corrupt_mask(void)
         .area_cells = 4U
     };
 
-    (void) bp_place_bottom_left(&sheet, &mask, BP_PLACE_REFERENCE);
+    (void) s_place(&sheet, &mask, BP_PLACE_REFERENCE);
 }
 
 /* Runs every test; any failure exits non-zero with the failing expectation. */
@@ -359,7 +433,7 @@ main(void)
     s_test_oversized_is_not_found();
     s_test_concave_part_fills_notch();
     s_test_part_nests_inside_hole();
-    s_test_jump_matches_reference();
+    s_test_fast_paths_match_reference();
 
     t_expect_abort(s_body_invalid_mode, "invalid mode");
     t_expect_abort(s_body_corrupt_mask, "corrupt mask");

@@ -130,6 +130,47 @@ void
 bp_row_or(uint64_t *dst, const uint64_t *a, const uint64_t *b,
     size_t stride_words);
 
+/* Counts the set bits in a row of words. */
+uint32_t
+bp_row_popcount(const uint64_t *row, size_t stride_words);
+
+/*
+ * Finds the smallest x with a bit set in a row. Returns 1 and writes it to
+ * out_x, or returns 0 when the row is empty. The erosion scan uses this to
+ * turn a mask of every feasible position into the bottom-left one.
+ */
+int
+bp_row_first_set(const uint64_t *row, size_t stride_words, uint32_t *out_x);
+
+/*
+ * dst = complement of src, with the padding past width_cells cleared again.
+ * Turning occupancy into free space is the first step of every erosion, and
+ * the mask matters: cells beyond the sheet edge must read as not free.
+ * dst may alias src.
+ */
+void
+bp_row_not(uint64_t *dst, const uint64_t *src, size_t stride_words,
+    uint32_t width_cells);
+
+/*
+ * Builds the run mask of a free-space row: dst has bit x set exactly when
+ * cells x through x + length_cells - 1 are all free. Cells past the row end
+ * are not free, so the mask falls away at the right edge on its own.
+ *
+ * This is the primitive the erosion scan is built from. A part span of length
+ * L fits at x precisely where this mask is set, so intersecting one such mask
+ * per span gives every position the whole part fits at, in one pass rather
+ * than one test per candidate.
+ *
+ * Costs about log2(length) row operations by repeated doubling: a run of a+b
+ * free cells at x is a run of a at x together with a run of b at x + a.
+ *
+ * scratch is one row of stride_words and must not alias dst or free_row.
+ */
+void
+bp_row_run_mask(uint64_t *dst, const uint64_t *free_row, size_t stride_words,
+    uint32_t width_cells, uint32_t length_cells, uint64_t *scratch);
+
 /*
  * Copies src into dst with the pattern moved along x: a positive delta moves
  * towards larger x, a negative delta towards smaller x. Bits pushed past
