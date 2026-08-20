@@ -8,10 +8,9 @@ The core is deterministic C11 with no allocation in the hot path. Python does
 tooling (DXF/SVG import, reporting, plots) and a separate binary does the GUI.
 The solver itself never needs either.
 
-Status: **phases P0 to P3 done** - there is a working nester for arbitrary
-simple polygons, with holes, free rotation and a guaranteed gap between parts,
-plus a CLI and SVG output. The search layer that makes it *good* is still
-ahead, but the primitive it needs is in place.
+Status: **phases P0 to P4 and P6 done** - a working nester for arbitrary
+simple polygons, with holes, free rotation, a guaranteed gap between parts, a
+CLI, SVG output, and two search layers on top of the construction heuristic.
 [PLAN.md](PLAN.md) has the design, the algorithm and the phased roadmap;
 [RESEARCH.md](RESEARCH.md) has the literature review that shaped them.
 
@@ -55,9 +54,17 @@ random fraction of candidate positions, and the randomness must stay out of
 the insertion order. [PLAN.md](PLAN.md) section 3.8 has the numbers, including
 for the choices that turned out worse.
 
-Still ahead is the family the literature actually favours: **overlap
-minimisation**, where parts may overlap temporarily and a guided local search
-drives total penetration back to zero inside a squeeze loop.
+Beside it runs the family the literature actually favours: **overlap
+minimisation**. The layout is squeezed into a shorter band, which forces parts
+to overlap, and a guided local search walks the overlap back to zero. Three
+things about it are easy to get wrong in ways that still compile and run, and
+[PLAN.md](PLAN.md) section 3.9 records all three with the measurements that
+exposed them - the sharpest being that a field built from grown footprints
+reports a perfectly legal layout as thousands of cells of conflict.
+
+The two search layers win on different instances. Reshuffling wins where parts
+can be reordered into a better stack, squeezing wins where the order is
+already right and the layout merely needs to settle.
 
 ## Try it
 
@@ -122,7 +129,9 @@ Built and tested:
                       position at a height
     bp_nester.[ch]    sequence decoder, bottom-left-fill
     bp_score.[ch]     contact measure and ranked position choice
-    bp_search.[ch]    ruin and recreate with a time budget
+    bp_penetration.[ch] weighted cell counts with per-row running totals
+    bp_separate.[ch]  guided local search that resolves overlap
+    bp_search.[ch]    ruin and recreate, then squeezing, on a time budget
     bp_job.[ch]       job file loading and mask construction
     bp_svg.[ch]       solution to SVG
     bp_pack.c         CLI
@@ -131,8 +140,6 @@ Built and tested:
 
 Still to come:
 
-    bp_penetration.[ch] prefix popcount, penetration map
-    bp_separate.[ch]  guided local search over overlap
     gui/              cimgui (the C API for Dear ImGui) + sokol; last phase
 
 ## Build
@@ -155,9 +162,11 @@ To search rather than make a single pass, give `bp_pack` a budget:
 ./bp_pack --time 10 --svg out.svg jobs/dense.job
 ```
 
-`--search <rounds>` bounds it by rounds instead. On `jobs/demo.job` five
-seconds takes the used height from 1134 mm down to 1035 mm, which is 99 mm
-more of the plate left as one clean strip.
+`--search <rounds>` bounds it by rounds instead, and `--compact <fraction>`
+sets how much of the budget goes to squeezing rather than reshuffling. On
+`jobs/demo.job` five seconds takes the used height from 1134 mm down to
+1035 mm, which is 99 mm more of the plate left as one clean strip; on
+`jobs/shapes.job` the squeezing phase takes 504 mm down to 483 mm.
 
 Compiler flags are fixed at `-std=c11 -Wall -Wextra -Werror -pedantic`, with
 AddressSanitizer and UndefinedBehaviorSanitizer runs required for any change

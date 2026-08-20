@@ -1,6 +1,7 @@
 #include "bp_job.h"
 
 #include "bp_contract.h"
+#include "bp_penetration.h"
 #include "bp_place.h"
 #include "bp_polygon.h"
 #include "bp_raster.h"
@@ -771,7 +772,18 @@ bp_job_load(const char *path, double cell_size_override_mm)
     job->scratch_row_capacity = bp_place_scratch_words(&job->sheet);
     job->scratch_rows = calloc(job->scratch_row_capacity,
         sizeof *job->scratch_rows);
-    if (!job->scratch_rows) {
+    job->scratch_count_capacity = bp_penetration_count_capacity(
+        job->sheet_width_cells, job->sheet_height_cells);
+    job->scratch_prefix_capacity = bp_penetration_prefix_capacity(
+        job->sheet_width_cells, job->sheet_height_cells);
+    job->scratch_counts = calloc(job->scratch_count_capacity,
+        sizeof *job->scratch_counts);
+    job->scratch_prefix = calloc(job->scratch_prefix_capacity,
+        sizeof *job->scratch_prefix);
+    job->scratch_weights = calloc(instances, sizeof *job->scratch_weights);
+    job->scratch_overlap = calloc(instances, sizeof *job->scratch_overlap);
+    if (!job->scratch_rows || !job->scratch_counts || !job->scratch_prefix
+        || !job->scratch_weights || !job->scratch_overlap) {
         result.status = BP_JOB_OUT_OF_MEMORY;
         goto failed;
     }
@@ -834,6 +846,10 @@ bp_job_destroy(bp_job_t **job)
     free((*job)->scratch_best_placed);
     free((*job)->scratch_best);
     free((*job)->scratch_rows);
+    free((*job)->scratch_counts);
+    free((*job)->scratch_prefix);
+    free((*job)->scratch_weights);
+    free((*job)->scratch_overlap);
     free((*job)->placements);
     free(*job);
     *job = NULL;

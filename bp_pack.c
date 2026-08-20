@@ -31,6 +31,8 @@ s_usage(void)
         "  --ruin <parts>              most parts lifted per round (8)\n"
         "  --blink <rate>              chance a position is passed over "
         "(0.08)\n"
+        "  --compact <fraction>        share of the budget spent squeezing "
+        "(0.4)\n"
         "  --svg <path>                write the layout as SVG\n"
         "  --csv                       one machine-readable summary line\n");
     exit(1);
@@ -51,6 +53,7 @@ main(int argc, char **argv)
     uint32_t height_window = 1U;
     uint32_t max_ruin = 8U;
     double blink_rate = 0.08;
+    double compact_fraction = 0.4;
     int want_csv = 0;
     int argument;
     bp_job_load_result_t loaded;
@@ -59,6 +62,8 @@ main(int argc, char **argv)
     uint32_t placement_count = 0U;
     uint32_t iterations_run = 0U;
     uint32_t improvements = 0U;
+    uint32_t squeezes = 0U;
+    uint32_t squeezes_resolved = 0U;
     clock_t started;
     double seconds;
     double sheet_area_cells;
@@ -111,6 +116,10 @@ main(int argc, char **argv)
         } else if (strcmp(item, "--blink") == 0 && argument + 1 < argc) {
             blink_rate = strtod(argv[++argument], NULL);
             if (blink_rate < 0.0 || blink_rate >= 1.0)
+                s_usage();
+        } else if (strcmp(item, "--compact") == 0 && argument + 1 < argc) {
+            compact_fraction = strtod(argv[++argument], NULL);
+            if (compact_fraction < 0.0 || compact_fraction > 1.0)
                 s_usage();
         } else if (strcmp(item, "--cell") == 0 && argument + 1 < argc) {
             cell_override_mm = strtod(argv[++argument], NULL);
@@ -166,6 +175,15 @@ main(int argc, char **argv)
             .scratch_capacity = job->part_count,
             .scratch_rows = job->scratch_rows,
             .scratch_row_capacity = job->scratch_row_capacity,
+            .scratch_counts = compact_fraction > 0.0
+                ? job->scratch_counts
+                : NULL,
+            .scratch_count_capacity = job->scratch_count_capacity,
+            .scratch_prefix = job->scratch_prefix,
+            .scratch_prefix_capacity = job->scratch_prefix_capacity,
+            .scratch_weights = job->scratch_weights,
+            .scratch_overlap = job->scratch_overlap,
+            .compact_fraction = compact_fraction,
             .placements = job->placements,
             .placed = job->placed,
             .placement_capacity = job->part_count
@@ -186,6 +204,8 @@ main(int argc, char **argv)
         result.candidate_checks = search.iterations_run;
         iterations_run = search.iterations_run;
         improvements = search.improvements;
+        squeezes = search.squeezes;
+        squeezes_resolved = search.squeezes_resolved;
     } else {
         result = bp_nester_solve((bp_nester_solve_args_t) {
             .sheet = &job->sheet,
@@ -235,8 +255,9 @@ main(int argc, char **argv)
             result.used_height_cells * job->cell_size_mm);
         if (iterations_run > 0U)
             (void) printf("search       %u rounds, %u improvements, "
-                "%.3f s\n", (unsigned) iterations_run,
-                (unsigned) improvements, seconds);
+                "%u/%u squeezes, %.3f s\n", (unsigned) iterations_run,
+                (unsigned) improvements, (unsigned) squeezes_resolved,
+                (unsigned) squeezes, seconds);
         else
             (void) printf("candidates   %llu positions tested in %.3f s\n",
                 (unsigned long long) result.candidate_checks, seconds);

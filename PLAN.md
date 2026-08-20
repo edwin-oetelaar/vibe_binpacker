@@ -289,27 +289,70 @@ fits and there is nothing to win.
 
 ### 3.9 Search layer, second form: overlap minimisation
 
-Still to build, and still what the literature says wins. Structure, following
-sparrow (2025):
+Built. The layout is squeezed into a shorter band, which forces parts to
+overlap, and a guided local search walks the overlap back to zero. Success is
+a strictly shorter layout; failure is rolled back and the next attempt asks
+for less.
 
-1. **Squeeze**: make the problem infeasible on purpose - add the next part, or
-   shrink the usable region by a fraction of a percent - which forces
-   collisions.
-2. **Separate**: resolve those collisions by guided local search. Per colliding
-   pair keep a GLS weight; repeatedly take a colliding part and move it to the
-   minimum of its weighted penetration map (3.7); raise weights on collisions
-   that persist, decay them once resolved.
-3. **Accept or roll back**, disrupting by swapping two large parts when stuck.
-4. **Compress**: retry from the best layout with progressively smaller squeeze
-   steps.
+**The data-structure question this section used to leave open is settled.**
+Per-cell counts with per-row running totals cost O(area) to add or remove a
+part against the bitboard's O(area / 64), but they buy a probe that costs one
+subtraction per span instead of one test per cell. Since a move makes one
+removal, one insertion and of the order of a hundred probes, the probe side
+wins: roughly 150 microseconds a move on a 1200 x 1200 sheet, against several
+milliseconds for anything that walks cells. The field is `uint32` counts and
+`uint64` totals, about 17 MB at 1 mm, and that is the term that scales badly
+with resolution.
 
-The open question this must answer first is a data-structure one. Penetration
-needs per-cell *counts*, not bits, because two parts may cover the same cell -
-and counts give up the property that makes the bitboard fast, namely that
-occupying a 300-cell run costs five word writes rather than three hundred byte
-increments. Section 3.7 assumes prefix sums over counts; whether that beats
-simply rebuilding a bitmap of everything-except-the-moving-part is a
-measurement nobody has taken yet.
+**Three findings, and all three were bugs in the obvious design.**
+
+*The field must hold true geometry and be probed with the grown footprint.*
+Grown masks are not mutually exclusive: two parts exactly one clearance apart
+each contain the gap between them, so a field built from grown masks reports a
+perfectly legal layout as thousands of cells of conflict. Measured on the
+36-part sheet, shrinking the band by a single cell appeared to create 7706
+cells of overlap, essentially all of it this artefact, and zero was
+unreachable by construction. The clearance rule is asymmetric on purpose - one
+grown against the others solid - and the separation has to be asymmetric the
+same way. A part's violation is then how much *other* material lies inside its
+grown footprint, and zero everywhere means every pair is far enough apart.
+
+*Always moving the worst offender deadlocks.* A part whose best position is no
+better than the one it has does not move; its penalty then rises, which makes
+it the worst offender again, and the search spends its whole budget on the one
+part it cannot help. On four squares that fit a sheet easily, that left 23
+cells unresolved for two hundred straight iterations while the part that could
+have moved was never picked. Drawing the part at random, weighted by how badly
+it does, resolved the same case in 53.
+
+*The penalty has to be in the cost, not only in the choice.* Weighting which
+part moves is not guided local search, it only looks like it. With penalties
+steering selection alone, no squeeze on a tight sheet ever resolved: the
+search stalled after a handful of moves because no single part had anywhere
+better to go and the landscape never changed. Adding each part's weight into
+the field itself - so sitting on a repeat offender genuinely costs more - made
+every squeeze resolve, in 15 to 114 iterations instead of stalling at a
+thousand. This is the whole point of the method and it is easy to implement in
+a way that quietly does nothing.
+
+Measured against the P4 result, both phases now exist and they win on
+different instances:
+
+| job | baseline | ruin and recreate | plus squeezing |
+| --- | -------- | ----------------- | -------------- |
+| `demo.job` used height | 1134 mm | **1035 mm** | 1035 mm |
+| `shapes.job` used height | 504 mm | 504 mm | **483 mm** |
+| `dense.job` utilisation | 95.17 % | **95.83 %** | 95.63 % |
+
+Reshuffling wins where parts can be reordered into a better stack; squeezing
+wins where the order is already right and the layout merely needs to settle.
+Neither dominates, the split between them is a knob, and on `dense.job` the
+budget spent squeezing would have been better spent reshuffling. A per-instance
+or adaptive split is the obvious next thing to try.
+
+Still missing from the sparrow recipe: inserting parts that did not fit at all
+by placing them overlapping and separating, which is what would move
+`dense.job`; and per-*pair* penalties rather than per-part.
 
 ### 3.10 Objective
 
@@ -342,8 +385,8 @@ Modules marked **done** exist and are tested.
 | `bp_raster`    | **done** conservative fill, clearance growth                |
 | `bp_score`     | **done** contact measure and ranked position choice         |
 | `bp_search`    | **done** ruin and recreate with a time budget               |
-| `bp_penetration`| per-row prefix popcount, penetration map queries            |
-| `bp_separate`  | guided local search that resolves overlap                   |
+| `bp_penetration`| **done** weighted cell counts with per-row running totals  |
+| `bp_separate`  | **done** guided local search that resolves overlap          |
 
 The erosion path of section 3.3 will slot in behind the existing `bp_place`
 API as a third mode, tested against the same reference scan.
@@ -435,9 +478,9 @@ Each phase ends with tests green and a benchmark number recorded.
 | P3 | polygon rasteriser, arbitrary angles, kerf and margin             | **done**: `pixi run demo` packs L shapes, triangles and a frame at free angles, clearance verified from the SVG |
 | P4 | scoring, ruin and recreate, time budget                            | **done**: 8.7 % lower used height on `demo.job` in 5 s, 95.17 to 95.87 % utilisation on `dense.job` |
 | P5 | holes and part-in-part nesting                                    | a part provably placed inside another's hole |
-| P6 | penetration map, guided local search, squeeze loop (3.9)          | beats the ruin-and-recreate result on the same suite |
-| P6b | GUI viewer and stepper                                           | can watch a pack being built |
-| P7 | multiple sheets, remnant tracking, DXF import/export              | end to end from a real DXF |
+| P6 | penetration field, guided local search, squeeze loop (3.9)        | **done**: `shapes.job` used height 504 to 483 mm; wins where reshuffling does not, and the reverse |
+| P7 | GUI viewer and stepper                                            | can watch a pack being built |
+| P8 | multiple sheets, remnant tracking, DXF import/export              | end to end from a real DXF |
 
 ## 9. Open questions
 

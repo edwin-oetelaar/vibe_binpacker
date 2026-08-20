@@ -11,3 +11,5 @@ test_bp_search
 bp_pack
 *.svg
 bp_bench
+test_bp_penetration
+test_bp_separate

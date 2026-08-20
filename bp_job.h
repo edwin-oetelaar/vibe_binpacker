@@ -49,6 +49,13 @@ typedef struct {
     size_t scratch_row_capacity;
     /* Bookkeeping bp_search needs; unused by the plain nester. */
     uint8_t *placed;
+    /* Penetration field storage for the compaction phase of bp_search. */
+    uint32_t *scratch_counts;
+    size_t scratch_count_capacity;
+    uint64_t *scratch_prefix;
+    size_t scratch_prefix_capacity;
+    uint32_t *scratch_weights;
+    uint64_t *scratch_overlap;
     uint8_t *scratch_placed;
     uint8_t *scratch_best_placed;
     bp_placement_t *scratch_best;

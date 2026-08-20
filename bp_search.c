@@ -1,7 +1,9 @@
 #include "bp_search.h"
 
 #include "bp_contract.h"
+#include "bp_penetration.h"
 #include "bp_place.h"
+#include "bp_separate.h"
 
 #include <string.h>
 #include <time.h>
@@ -57,6 +59,18 @@ s_require_args(const bp_search_args_t *args)
     BP_REQUIRE(args->max_positions > 0U);
     BP_REQUIRE(args->max_ruin > 0U);
     BP_REQUIRE(args->blink_rate >= 0.0 && args->blink_rate < 1.0);
+    BP_REQUIRE(args->compact_fraction >= 0.0 && args->compact_fraction <= 1.0);
+    if (args->scratch_counts) {
+        BP_REQUIRE(args->scratch_prefix);
+        BP_REQUIRE(args->scratch_weights);
+        BP_REQUIRE(args->scratch_overlap);
+        BP_REQUIRE(args->scratch_count_capacity
+            >= bp_penetration_count_capacity(args->sheet->width_cells,
+                args->sheet->height_cells));
+        BP_REQUIRE(args->scratch_prefix_capacity
+            >= bp_penetration_prefix_capacity(args->sheet->width_cells,
+                args->sheet->height_cells));
+    }
     BP_REQUIRE(args->scratch_order);
     BP_REQUIRE(args->scratch_placed);
     BP_REQUIRE(args->scratch_best_placed);
@@ -403,6 +417,187 @@ s_restore(s_state_t *state, const bp_placement_t *saved,
     }
 }
 
+/* Returns the height the collision footprints reach, which is what squeezes. */
+static uint32_t
+s_region_height(const bp_search_args_t *args)
+{
+    uint32_t index;
+    uint32_t top = 0U;
+
+    for (index = 0U; index < args->part_count; ++index) {
+        const bp_orientation_t *option;
+        uint32_t reach;
+
+        if (!args->placed[index])
+            continue;
+        option = &args->parts[index]
+            .orientations[args->placements[index].orientation];
+        reach = args->placements[index].y_cells
+            + option->collision->height_cells;
+        if (reach > top)
+            top = reach;
+    }
+    return top;
+}
+
+/* Returns the tallest collision footprint, the floor any squeeze stops at. */
+static uint32_t
+s_tallest(const bp_search_args_t *args)
+{
+    uint32_t index;
+    uint32_t tallest = 0U;
+
+    for (index = 0U; index < args->part_count; ++index) {
+        const bp_orientation_t *option;
+
+        if (!args->placed[index])
+            continue;
+        option = &args->parts[index]
+            .orientations[args->placements[index].orientation];
+        if (option->collision->height_cells > tallest)
+            tallest = option->collision->height_cells;
+    }
+    return tallest;
+}
+
+/* Rebuilds the sheet bitmap from the placements after a separation. */
+static void
+s_rebuild_sheet(s_state_t *state)
+{
+    const bp_search_args_t *args = state->args;
+    uint32_t index;
+
+    bp_bitmap_clear(args->sheet);
+    state->placed_area_cells = 0U;
+    state->value_cells = 0U;
+    state->placed_count = 0U;
+    for (index = 0U; index < args->part_count; ++index)
+        if (args->placed[index])
+            s_apply(state, &args->placements[index]);
+}
+
+/*
+ * Squeezes the layout: shrink the band the parts have to fit in, push the ones
+ * that now stick out back inside, and let bp_separate resolve the overlap that
+ * creates. Success means a strictly shorter layout; failure means the squeeze
+ * was too greedy and is rolled back.
+ *
+ * Each attempt asks less than the last one that failed, so the phase converges
+ * on the tightest band that still separates rather than giving up at the first
+ * refusal.
+ */
+static void
+s_compact(s_state_t *state, clock_t started, double deadline,
+    bp_search_result_t *result)
+{
+    const bp_search_args_t *args = state->args;
+    bp_penetration_t field;
+    uint32_t region_height = s_region_height(args);
+    uint32_t floor_height = s_tallest(args);
+    uint32_t shrink;
+    uint32_t failures = 0U;
+
+    if (region_height <= floor_height)
+        return;
+    shrink = region_height / 200U;
+    if (shrink == 0U)
+        shrink = 1U;
+
+    field = bp_penetration_init((bp_penetration_init_args_t) {
+        .width_cells = args->sheet->width_cells,
+        .height_cells = args->sheet->height_cells,
+        .counts = args->scratch_counts,
+        .count_capacity = args->scratch_count_capacity,
+        .prefix = args->scratch_prefix,
+        .prefix_capacity = args->scratch_prefix_capacity
+    });
+
+    while (failures < 4U) {
+        uint32_t target;
+        uint32_t index;
+        bp_separate_result_t separated;
+
+        if (deadline > 0.0
+            && (double) (clock() - started) / CLOCKS_PER_SEC >= deadline)
+            break;
+
+        target = region_height > shrink ? region_height - shrink : 0U;
+        if (target < floor_height)
+            target = floor_height;
+        if (target >= region_height)
+            break;
+
+        /* Keep the layout to fall back to before anything is disturbed. */
+        memcpy(args->scratch_best, args->placements,
+            args->part_count * sizeof args->scratch_best[0]);
+        memcpy(args->scratch_best_placed, args->placed,
+            args->part_count * sizeof args->scratch_best_placed[0]);
+
+        bp_penetration_clear(&field);
+        for (index = 0U; index < args->part_count; ++index) {
+            const bp_orientation_t *option;
+            uint32_t limit;
+
+            if (!args->placed[index])
+                continue;
+            option = &args->parts[index]
+                .orientations[args->placements[index].orientation];
+            limit = target - option->collision->height_cells;
+            if (args->placements[index].y_cells > limit)
+                args->placements[index].y_cells = limit;
+            /* The field holds true geometry; see bp_separate for why. */
+            /* Every part starts at weight one; bp_separate raises them. */
+            bp_penetration_add(&field, option->solid,
+                args->placements[index].x_cells
+                    + option->solid_offset_x_cells,
+                args->placements[index].y_cells
+                    + option->solid_offset_y_cells, 1U);
+        }
+
+        ++result->squeezes;
+        separated = bp_separate_resolve((bp_separate_args_t) {
+            .field = &field,
+            .parts = args->parts,
+            .part_count = args->part_count,
+            .placements = args->placements,
+            .placed = args->placed,
+            .region_width_cells = args->sheet->width_cells,
+            .region_height_cells = target,
+            .max_iterations = 300U * args->part_count,
+            .samples = 48U,
+            .patience = 30U * args->part_count,
+            .random_state = &state->random_state,
+            .scratch_weights = args->scratch_weights,
+            .scratch_overlap = args->scratch_overlap,
+            .scratch_capacity = args->part_count
+        });
+
+        if (separated.resolved) {
+            ++result->squeezes_resolved;
+            s_rebuild_sheet(state);
+            region_height = s_region_height(args);
+            failures = 0U;
+        } else {
+            memcpy(args->placements, args->scratch_best,
+                args->part_count * sizeof args->placements[0]);
+            memcpy(args->placed, args->scratch_best_placed,
+                args->part_count * sizeof args->placed[0]);
+            s_rebuild_sheet(state);
+            ++failures;
+            /* Ask for less next time rather than stopping outright. */
+            shrink = shrink > 1U ? shrink / 2U : 1U;
+            if (shrink == 1U && failures >= 4U)
+                break;
+        }
+    }
+
+    /* The compaction result is the layout to keep. */
+    memcpy(args->scratch_best, args->placements,
+        args->part_count * sizeof args->scratch_best[0]);
+    memcpy(args->scratch_best_placed, args->placed,
+        args->part_count * sizeof args->scratch_best_placed[0]);
+}
+
 /* Packs by ruin and recreate. */
 bp_search_result_t
 bp_search_solve(bp_search_args_t args)
@@ -414,6 +609,7 @@ bp_search_solve(bp_search_args_t args)
     uint64_t best_value;
     uint32_t best_height;
     uint64_t best_lift;
+    double reshuffle_deadline;
     uint32_t index;
     uint32_t iteration;
 
@@ -442,6 +638,10 @@ bp_search_solve(bp_search_args_t args)
     memcpy(args.scratch_best_placed, args.placed,
         args.part_count * sizeof args.scratch_best_placed[0]);
 
+    reshuffle_deadline = args.time_budget_seconds > 0.0
+        ? args.time_budget_seconds * (1.0 - args.compact_fraction)
+        : 0.0;
+
     for (iteration = 0U; iteration < args.iterations; ++iteration) {
         uint32_t ruin_count;
         uint32_t removed;
@@ -449,9 +649,9 @@ bp_search_solve(bp_search_args_t args)
         uint32_t height;
         uint64_t lift;
 
-        if (args.time_budget_seconds > 0.0
+        if (reshuffle_deadline > 0.0
             && (double) (clock() - started) / CLOCKS_PER_SEC
-                >= args.time_budget_seconds)
+                >= reshuffle_deadline)
             break;
         ++result.iterations_run;
 
@@ -500,6 +700,9 @@ bp_search_solve(bp_search_args_t args)
         }
     }
 
+    s_restore(&state, args.scratch_best, args.scratch_best_placed);
+    if (args.scratch_counts)
+        s_compact(&state, started, args.time_budget_seconds, &result);
     s_restore(&state, args.scratch_best, args.scratch_best_placed);
 
     result.placed_count = state.placed_count;

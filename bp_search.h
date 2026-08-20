@@ -36,6 +36,20 @@ typedef struct {
     size_t scratch_row_capacity;
 
     /*
+     * Storage for the compaction phase, which squeezes the layout by letting
+     * parts overlap and then separating them again. Leave scratch_counts NULL
+     * to skip that phase entirely; see bp_penetration for the capacities.
+     */
+    uint32_t *scratch_counts;
+    size_t scratch_count_capacity;
+    uint64_t *scratch_prefix;
+    size_t scratch_prefix_capacity;
+    uint32_t *scratch_weights;
+    uint64_t *scratch_overlap;
+    /* Share of the budget spent compacting rather than reshuffling. */
+    double compact_fraction;
+
+    /*
      * One entry per part, indexed by part index rather than packed, so the
      * placed flags line up with it. Only entries whose flag is set are valid.
      */
@@ -59,6 +73,9 @@ typedef struct {
     uint64_t lift_cells;
     uint32_t iterations_run;
     uint32_t improvements;
+    /* Squeeze attempts made, and how many of them separated successfully. */
+    uint32_t squeezes;
+    uint32_t squeezes_resolved;
     double seconds;
 } bp_search_result_t;
 
@@ -76,6 +93,12 @@ typedef struct {
  * because what is left over is worth more as one clean strip than as
  * scattered gaps; and at equal height a lower centre of mass, which is the
  * term that actually gives the search a gradient to follow.
+ *
+ * When the compaction storage is supplied, a second phase follows: shrink the
+ * region the parts must fit in, let them overlap, and drive the overlap back
+ * to zero with bp_separate. That is the method the nesting literature settled
+ * on, and it reaches layouts no sequence of legal placements can, because it
+ * is allowed to pass through illegal ones.
  *
  * The sheet is cleared first. Every scratch array must hold part_count
  * entries, and scratch_rows must satisfy bp_place_scratch_words.
