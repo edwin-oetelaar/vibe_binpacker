@@ -221,6 +221,35 @@ bp_mask_overlaps(const bp_bitmap_t *sheet, const bp_mask_t *mask, uint32_t x,
     return 0;
 }
 
+/* Reports whether a row of the mask contains exactly this span. */
+int
+bp_mask_row_has_span(const bp_mask_t *mask, uint32_t row, bp_span_t span)
+{
+    uint32_t index;
+
+    BP_REQUIRE(mask);
+    if (row >= mask->height_cells)
+        return 0;
+    for (index = mask->row_offsets[row]; index < mask->row_offsets[row + 1U];
+        ++index)
+        if (mask->spans[index].x_cells == span.x_cells
+            && mask->spans[index].length_cells == span.length_cells)
+            return 1;
+    return 0;
+}
+
+/* Returns how many rows from `row` upwards repeat this span. */
+uint32_t
+bp_mask_run_height(const bp_mask_t *mask, uint32_t row, bp_span_t span)
+{
+    uint32_t height = 1U;
+
+    BP_REQUIRE(bp_mask_row_has_span(mask, row, span));
+    while (bp_mask_row_has_span(mask, row + height, span))
+        ++height;
+    return height;
+}
+
 /* Frees the mask's cells after proving they are all occupied. */
 void
 bp_mask_erase(bp_bitmap_t *sheet, const bp_mask_t *mask, uint32_t x,

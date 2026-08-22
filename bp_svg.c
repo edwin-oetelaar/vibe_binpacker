@@ -10,22 +10,6 @@ static const char *const s_palette[] = {
 
 #define S_PALETTE_SIZE (sizeof s_palette / sizeof s_palette[0])
 
-/* Reports whether a row of the mask contains exactly this span. */
-static int
-s_row_has_span(const bp_mask_t *mask, uint32_t row, const bp_span_t *span)
-{
-    uint32_t index;
-
-    if (row >= mask->height_cells)
-        return 0;
-    for (index = mask->row_offsets[row]; index < mask->row_offsets[row + 1U];
-        ++index)
-        if (mask->spans[index].x_cells == span->x_cells
-            && mask->spans[index].length_cells == span->length_cells)
-            return 1;
-    return 0;
-}
-
 /*
  * Emits one span as a rectangle, extended upwards over every following row
  * that repeats it. A span whose row below already repeats it was emitted
@@ -37,20 +21,19 @@ s_write_run(FILE *out, const bp_mask_t *mask, uint32_t row, uint32_t index,
     uint32_t origin_x_cells, uint32_t origin_y_cells,
     uint32_t sheet_height_cells, double cell_size_mm)
 {
-    const bp_span_t *span = &mask->spans[index];
-    uint32_t run = 1U;
+    bp_span_t span = mask->spans[index];
+    uint32_t run;
     double x_mm;
     double y_mm;
     double width_mm;
     double height_mm;
 
-    if (row > 0U && s_row_has_span(mask, row - 1U, span))
+    if (row > 0U && bp_mask_row_has_span(mask, row - 1U, span))
         return;
-    while (s_row_has_span(mask, row + run, span))
-        ++run;
+    run = bp_mask_run_height(mask, row, span);
 
-    x_mm = (origin_x_cells + span->x_cells) * cell_size_mm;
-    width_mm = span->length_cells * cell_size_mm;
+    x_mm = (origin_x_cells + span.x_cells) * cell_size_mm;
+    width_mm = span.length_cells * cell_size_mm;
     height_mm = run * cell_size_mm;
     /* SVG y grows downwards, so flip against the sheet height. */
     y_mm = (sheet_height_cells - (origin_y_cells + row + run)) * cell_size_mm;

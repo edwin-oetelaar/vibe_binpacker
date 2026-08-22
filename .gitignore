@@ -1,5 +1,5 @@
 .pixi/
-*.o
+gui_build/
 test_bp_bitmap
 test_bp_mask
 test_bp_polygon
@@ -13,3 +13,8 @@ bp_pack
 bp_bench
 test_bp_penetration
 test_bp_separate
+third_party/
+gui_build/
+bp_gui
+imgui.ini
+*.ppm

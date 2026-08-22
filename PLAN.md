@@ -452,12 +452,15 @@ tool), tweak parameters and re-run.
 
 Options, in order of preference:
 
-1. **cimgui + sokol_app/sokol_gfx** - `cimgui` is the generated **C** API for
-   Dear ImGui (not to be confused with `CImGui.jl`, the Julia package that
-   wraps it; no Julia is involved). On top of single-header C backends,
-   everything stays C, vendored in `third_party/`, no package manager
-   surprises. The sheet is one texture upload, part outlines are ImGui
-   draw-list polylines.
+Built with the first of these:
+
+1. **cimgui + GLFW + OpenGL 3** - `cimgui` is the generated **C** API for Dear
+   ImGui (not to be confused with `CImGui.jl`, the Julia package that wraps it;
+   no Julia is involved). GLFW and the GL headers come from the Pixi
+   environment, cimgui and Dear ImGui from a pinned checkout that is not
+   committed. No texture is needed at all: parts go straight into the ImGui
+   draw list as merged rectangles, which is fewer moving parts than a texture
+   upload and scales fine at a few thousand rectangles.
 2. **Dear ImGui + GLFW + OpenGL3** - the mainstream path, but the GUI file
    becomes C++ calling the core through `extern "C"`. More examples online.
 3. **raylib** - least code to first pixel, weaker for panels and controls.
@@ -479,16 +482,17 @@ Each phase ends with tests green and a benchmark number recorded.
 | P4 | scoring, ruin and recreate, time budget                            | **done**: 8.7 % lower used height on `demo.job` in 5 s, 95.17 to 95.87 % utilisation on `dense.job` |
 | P5 | holes and part-in-part nesting                                    | a part provably placed inside another's hole |
 | P6 | penetration field, guided local search, squeeze loop (3.9)        | **done**: `shapes.job` used height 504 to 483 mm; wins where reshuffling does not, and the reverse |
-| P7 | GUI viewer and stepper                                            | can watch a pack being built |
+| P7 | GUI viewer and stepper                                            | **done**: `pixi run gui`, pan and zoom, step slider, live re-pack |
 | P8 | multiple sheets, remnant tracking, DXF import/export              | end to end from a real DXF |
 
 ## 9. Open questions
 
 1. ~~Grid resolution~~ - settled: configurable, default 1.0 mm, 0.5 mm fine
    setting, 0.1 mm rejected as a global search resolution (RESEARCH.md 7).
-2. Which angles for free rotation: 90 deg only, 15 deg steps, or continuous?
-   Each extra angle is another rasterised mask per part, so this drives memory
-   and search size. This is now the biggest open design question.
+2. ~~Which angles for free rotation?~~ - settled: quarter turns. Most parts
+   for this workshop have right angles, so `every:90` is the working default.
+   Arbitrary angles stay supported and tested, and cost nothing when unused;
+   they are a mask per angle per part when they are.
 3. Real kerf value and whether the cut line is on the part boundary or offset.
    Clearance itself is settled: dilate the candidate only (3.5).
 4. Cutting-order constraints (thermal, common-line cutting, tipping parts) -

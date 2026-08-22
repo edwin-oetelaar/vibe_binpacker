@@ -97,6 +97,25 @@ bp_mask_overlaps(const bp_bitmap_t *sheet, const bp_mask_t *mask, uint32_t x,
     uint32_t y);
 
 /*
+ * Reports whether a row of the mask contains exactly this span. Rows past the
+ * top read as empty, so a caller may walk off the end without checking.
+ */
+int
+bp_mask_row_has_span(const bp_mask_t *mask, uint32_t row, bp_span_t span);
+
+/*
+ * Returns how many rows from `row` upwards repeat this span, at least one.
+ *
+ * With bp_mask_row_has_span this turns a mask into a short list of rectangles:
+ * skip a span whose row below already repeats it, and draw the rest with the
+ * height this returns. A plain rectangle collapses to one rectangle, an L to
+ * two. Both the SVG writer and the viewer need that, and neither should own
+ * the merging.
+ */
+uint32_t
+bp_mask_run_height(const bp_mask_t *mask, uint32_t row, bp_span_t span);
+
+/*
  * Frees the mask's cells on the sheet after proving every one of them is
  * occupied. Lifting a part off the sheet is only safe because placements
  * never overlap: the cells can belong to nothing else.

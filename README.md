@@ -8,9 +8,10 @@ The core is deterministic C11 with no allocation in the hot path. Python does
 tooling (DXF/SVG import, reporting, plots) and a separate binary does the GUI.
 The solver itself never needs either.
 
-Status: **phases P0 to P4 and P6 done** - a working nester for arbitrary
-simple polygons, with holes, free rotation, a guaranteed gap between parts, a
-CLI, SVG output, and two search layers on top of the construction heuristic.
+Status: **phases P0 to P4, P6 and P7 done** - a working nester for arbitrary
+simple polygons, with holes, rotation, a guaranteed gap between parts, a CLI,
+SVG output, two search layers on top of the construction heuristic, and a
+viewer.
 [PLAN.md](PLAN.md) has the design, the algorithm and the phased roadmap;
 [RESEARCH.md](RESEARCH.md) has the literature review that shaped them.
 
@@ -138,9 +139,7 @@ Built and tested:
     bp_bench.c        repeatable benchmark
     tools/            Python tooling
 
-Still to come:
-
-    gui/              cimgui (the C API for Dear ImGui) + sokol; last phase
+    gui/bp_gui.c      viewer, in C, on cimgui and GLFW
 
 ## Build
 
@@ -155,6 +154,38 @@ pixi run test-sanitize
 ```
 
 The other tasks are `build`, `demo`, `benchmark` and `clean`.
+
+## The viewer
+
+A packing is a spatial thing, and a column of numbers hides everything that
+matters about it: which corner went wrong, which part is stranded, whether the
+waste is one usable strip or scattered slivers.
+
+```sh
+pixi run fetch-gui-deps
+```
+
+```sh
+pixi run gui
+```
+
+then `./bp_gui jobs/shapes.job`. Drag to pan, wheel to zoom, and drag the step
+slider to replay the placement order, which is the fastest way to watch a
+heuristic make a bad decision. The controls re-pack without restarting.
+
+The viewer is the only part of this project with a third-party dependency, and
+it is fenced off: `pixi run test`, `pixi run demo` and `pixi run benchmark`
+never touch it, and [tools/fetch_gui_deps.sh](tools/fetch_gui_deps.sh) pins the
+revision rather than committing a copy of Dear ImGui. The window itself is
+plain C - cimgui is the generated C API for Dear ImGui, and the C++ behind it
+is compiled separately and never appears in our sources. Parts are drawn
+straight into the ImGui draw list, so there are no shaders and no textures:
+`bp_mask_run_height` turns a footprint into a handful of rectangles and those
+go into the list.
+
+`./bp_gui <job> --shot frame.ppm --frames 12` renders a few frames, writes the
+framebuffer and exits, which is how a window gets checked from a script. A GUI
+that builds is not a GUI that draws.
 
 To search rather than make a single pass, give `bp_pack` a budget:
 
