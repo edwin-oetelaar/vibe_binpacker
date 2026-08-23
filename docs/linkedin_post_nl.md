@@ -37,6 +37,6 @@ ervan.
 
 Alles staat erin, inclusief de metingen die tegenvielen.
 
-→ github.com/chat-l18l/vibe_binpacker
+→ github.com/edwin-oetelaar/vibe_binpacker
 
 #optimalisatie #operationsresearch #maakindustrie #PCB #nesting

@@ -38,6 +38,6 @@ it.
 
 It is all in there, including the results that disappointed.
 
-→ github.com/chat-l18l/vibe_binpacker
+→ github.com/edwin-oetelaar/vibe_binpacker
 
 #optimization #operationsresearch #manufacturing #PCB #nesting

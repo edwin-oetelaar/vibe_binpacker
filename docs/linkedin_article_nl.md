@@ -128,10 +128,10 @@ De hele repository staat open, MIT-licentie, inclusief de uitkomsten die
 tegenvielen. Een repository die alleen laat zien wat werkte, vertelt je bar
 weinig over hoe je er komt.
 
-**github.com/chat-l18l/vibe_binpacker** — met een README in het
-[Nederlands](https://github.com/chat-l18l/vibe_binpacker/blob/main/README.nl.md)
+**github.com/edwin-oetelaar/vibe_binpacker** — met een README in het
+[Nederlands](https://github.com/edwin-oetelaar/vibe_binpacker/blob/main/README.nl.md)
 en het
-[Engels](https://github.com/chat-l18l/vibe_binpacker/blob/main/README.md).
+[Engels](https://github.com/edwin-oetelaar/vibe_binpacker/blob/main/README.md).
 
 Snij je zelf onderdelen uit voorraadmateriaal, of combineer je orders op een
 paneel, en heb je het vermoeden dat daar nog wat te halen valt? Ik praat er

@@ -124,9 +124,9 @@ The whole repository is open, MIT licensed, including the results that
 disappointed. A repository that shows only what worked tells you very little
 about how to get there.
 
-**github.com/chat-l18l/vibe_binpacker** — with a README in
-[English](https://github.com/chat-l18l/vibe_binpacker/blob/main/README.md) and
-[Dutch](https://github.com/chat-l18l/vibe_binpacker/blob/main/README.nl.md).
+**github.com/edwin-oetelaar/vibe_binpacker** — with a README in
+[English](https://github.com/edwin-oetelaar/vibe_binpacker/blob/main/README.md) and
+[Dutch](https://github.com/edwin-oetelaar/vibe_binpacker/blob/main/README.nl.md).
 
 Do you cut parts from stock material, or combine orders on a panel, and
 suspect there is something left on the table? I am happy to talk it through.
