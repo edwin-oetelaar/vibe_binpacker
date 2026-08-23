@@ -100,11 +100,16 @@ could try far more things.
 ## Four years, and more than one right answer
 
 Three days a week I teach at Fontys ICT, in software engineering and
-information technology. The other two I build, at the edge of what is
-possible — AI and robots, and what I enjoy most is when that reaches the
-factory floor. I have kept that split for years, because each half keeps the
-other honest. You cannot explain what is changing if you have not had it in
-your hands.
+information technology. Not on a campus, but in the Fontys ICT InnovationLab
+on Strijp-T in Eindhoven: some 4,000 m² where education, research and industry
+sit on the same floor, and where students work on real questions alongside
+researchers and outside partners. I am mostly in the Smart Systems Lab,
+working on robots and on perception with cameras and AI.
+
+The other two days I build, at the edge of what is possible, and what I enjoy
+most is when that reaches the factory floor. I have kept that split for years,
+because each half keeps the other honest. You cannot explain what is changing
+if you have not had it in your hands.
 
 We get four years with these students. Four years to land three things that
 are considerably harder than any algorithm: that a problem usually has more
@@ -124,6 +129,9 @@ connects those two worlds, and that is where the impact is. I do it alongside
 a team of international colleagues who have all worked in industry themselves,
 which is why they can tell students what really happens rather than what is
 supposed to happen. It is enjoyable work, and it is serious work.
+
+If you are in the region and would like to see what goes on in that lab: it is
+an open environment, and you are welcome to drop by.
 
 ## Where an algorithm stops
 
@@ -176,4 +184,10 @@ suspect there is something left on the table? I am happy to talk it through.
 
 **Edwin van den Oetelaar** — lecturer at Fontys ICT, inventor and independent
 software developer
-edwin@oetelaar.com · +31 6 5332 9077 · [oetelaar.com](https://www.oetelaar.com/)
+
+Commercial work: edwin@oetelaar.com · +31 6 5332 9077 ·
+[oetelaar.com](https://www.oetelaar.com/) ·
+[LinkedIn](https://www.linkedin.com/in/oetelaar/)
+
+Student projects: e.vandenoetelaar@fontys.nl · Fontys ICT InnovationLab,
+building TQ, Achtseweg Zuid 151C, 5651 GW Eindhoven, Netherlands

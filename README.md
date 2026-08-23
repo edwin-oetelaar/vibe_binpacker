@@ -317,12 +317,18 @@ before claims, negative results kept, and a checker that does not trust the
 solver.
 
 My week is split. Three days I teach at Fontys ICT, in software engineering
-and information technology. The other two I build, at the edge of what is
-possible, with AI and robots — and what I enjoy most is when that reaches the
-factory floor. In Brainport the theory of computer science and mathematics
-borders on a region that actually makes things, and practical engineers are
-what connects those two worlds. That is what I try to give students, and it is
-exactly what I do for clients.
+and information technology. Not on a campus, but in the
+[Fontys ICT InnovationLab](https://www.fontysictinnovationlab.nl/) on Strijp-T
+in Eindhoven: some 4,000 m² where education, research and industry sit on the
+same floor and students work on real questions alongside researchers and
+outside partners. I am mostly in the Smart Systems Lab, working on robots and
+on perception with cameras and AI.
+
+The other two days I build, at the edge of what is possible, and what I enjoy
+most is when that reaches the factory floor. In Brainport the theory of
+computer science and mathematics borders on a region that actually makes
+things, and practical engineers are what connects those two worlds. That is
+what I try to give students, and it is exactly what I do for clients.
 
 This repository belongs to both. A client can see how I work. A student can
 see that a problem usually has more than one good answer, and that the wrong
@@ -349,15 +355,23 @@ you are also looking for new talent, the second is worth considering.
 
 > ### Get in touch
 >
-> **Edwin van den Oetelaar** — independent software developer, Netherlands
+> **Edwin van den Oetelaar** — lecturer at Fontys ICT, inventor and independent
+> software developer
 >
+> **For commercial work**
 > - Email: **[edwin@oetelaar.com](mailto:edwin@oetelaar.com)**
 > - Phone: **[+31 6 5332 9077](tel:+31653329077)**
 > - Web: **[oetelaar.com](https://www.oetelaar.com/)**
 > - LinkedIn: **[linkedin.com/in/oetelaar](https://www.linkedin.com/in/oetelaar/)**
 >
+> **For a student research project**
+> - Email: **[e.vandenoetelaar@fontys.nl](mailto:e.vandenoetelaar@fontys.nl)**
+> - Fontys ICT InnovationLab, building TQ, Achtseweg Zuid 151C, 5651 GW
+>   Eindhoven, Netherlands
+>
 > Happy to talk through a concrete case: what you cut, out of what, in what
-> volumes, and where the waste is now.
+> volumes, and where the waste is now. If you are in the region and want to see
+> what happens in the lab, you are welcome to drop by.
 
 ## Licence
 

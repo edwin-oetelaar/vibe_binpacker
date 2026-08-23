@@ -36,7 +36,8 @@ measuring.
 That is the ratio: AI accelerates what you can already do. It does not replace
 it.
 
-Three days a week I teach at Fontys ICT. We get four years to land three things
+Three days a week I teach at Fontys ICT, in the ICT InnovationLab on Strijp-T
+in Eindhoven. We get four years to land three things
 that are harder than any algorithm: that a problem usually has more than one
 good answer, that you have to get things wrong to learn anything, and that
 making progress usually beats waiting for the perfect answer.

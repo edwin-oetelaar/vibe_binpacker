@@ -104,11 +104,17 @@ meer heb kunnen uitproberen.
 ## Vier jaar, en meerdere goede antwoorden
 
 Drie dagen per week sta ik voor de klas bij Fontys ICT, bij software
-engineering en informatietechnologie. De andere twee dagen bouw ik zelf, op
-het grensvlak van wat er kan — AI en robots, en het mooiste vind ik het als
-dat de praktijk haalt. Die verdeling houd ik al jaren aan, omdat de ene helft
-de andere scherp houdt. Je kunt niet uitleggen wat er verandert als je het
-niet zelf in handen hebt gehad.
+engineering en informatietechnologie. Niet op een campus, maar in het Fontys
+ICT InnovationLab op Strijp-T in Eindhoven: zo'n 4.000 m² waar onderwijs,
+onderzoek en bedrijfsleven op dezelfde vloer zitten, en waar studenten met
+onderzoekers en externe partners aan echte vraagstukken werken. Zelf zit ik
+vooral in het Smart Systems Lab, waar ik aan robots werk en aan perceptie met
+camera's en AI.
+
+De andere twee dagen bouw ik zelf, op het grensvlak van wat er kan, en het
+mooiste vind ik het als dat de praktijk haalt. Die verdeling houd ik al jaren
+aan, omdat de ene helft de andere scherp houdt. Je kunt niet uitleggen wat er
+verandert als je het niet zelf in handen hebt gehad.
 
 We hebben vier jaar met deze studenten. Vier jaar om drie dingen over te
 brengen die een stuk lastiger zijn dan welk algoritme ook: dat een probleem
@@ -128,6 +134,9 @@ twee werelden verbindt, en daar zit de impact. Ik doe dat met een team van
 internationale collega's die allemaal zelf in het vak hebben gestaan — daarom
 kunnen ze studenten vertellen wat er echt gebeurt in plaats van wat er hoort
 te gebeuren. Het is leuk werk, en het is serieus werk.
+
+Zit je in de regio en wil je zien wat er in dat lab gebeurt: het is een open
+omgeving, en langskomen kan gewoon.
 
 ## Waar een algoritme ophoudt
 
@@ -182,4 +191,10 @@ graag over door.
 
 **Edwin van den Oetelaar** — docent bij Fontys ICT, uitvinder en zelfstandig
 softwareontwikkelaar
-edwin@oetelaar.com · 06 5332 9077 · [oetelaar.com](https://www.oetelaar.com/)
+
+Commercieel werk: edwin@oetelaar.com · 06 5332 9077 ·
+[oetelaar.com](https://www.oetelaar.com/) ·
+[LinkedIn](https://www.linkedin.com/in/oetelaar/)
+
+Studentenprojecten: e.vandenoetelaar@fontys.nl · Fontys ICT InnovationLab,
+gebouw TQ, Achtseweg Zuid 151C, 5651 GW Eindhoven

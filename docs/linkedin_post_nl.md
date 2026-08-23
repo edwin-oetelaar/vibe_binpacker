@@ -35,7 +35,8 @@ opgeleverd. Dertig jaar ervaring is wat erop stond dat er gemeten werd.
 Dat is de verhouding: AI is een versneller van wat je al kunt, geen vervanging
 ervan.
 
-Drie dagen per week sta ik voor de klas bij Fontys ICT. We hebben vier jaar om
+Drie dagen per week sta ik voor de klas bij Fontys ICT, in het ICT
+InnovationLab op Strijp-T in Eindhoven. We hebben vier jaar om
 studenten drie dingen mee te geven die lastiger zijn dan welk algoritme ook:
 dat een probleem meestal meer dan één goed antwoord heeft, dat je fouten moet
 maken om te leren, en dat voortgang boeken doorgaans meer waard is dan wachten
