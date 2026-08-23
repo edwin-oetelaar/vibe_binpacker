@@ -103,7 +103,7 @@ meer heb kunnen uitproberen.
 
 ## Vier jaar, en meerdere goede antwoorden
 
-Volgende week gaat het gebouw weer open en begint er een nieuwe lichting aan
+Deze week gaat het gebouw weer open en begint er een nieuwe lichting aan
 hun opdrachten. Drie dagen per week sta ik dan voor de klas bij Fontys ICT, bij
 software engineering en informatietechnologie. Niet op een campus, maar in het
 Fontys ICT InnovationLab op Strijp-T in Eindhoven: zo'n 4.000 m² waar onderwijs,

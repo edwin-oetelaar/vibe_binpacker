@@ -99,7 +99,7 @@ could try far more things.
 
 ## Four years, and more than one right answer
 
-Next week the building opens again and a new intake starts on their
+This week the building opens again and a new intake starts on their
 assignments. Three days a week I teach at Fontys ICT, in software engineering
 and information technology. Not on a campus, but in the Fontys ICT
 InnovationLab

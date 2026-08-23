@@ -35,7 +35,7 @@ opgeleverd. Dertig jaar ervaring is wat erop stond dat er gemeten werd.
 Dat is de verhouding: AI is een versneller van wat je al kunt, geen vervanging
 ervan.
 
-Volgende week gaat het gebouw weer open. Drie dagen per week sta ik dan voor
+Deze week gaat het gebouw weer open. Drie dagen per week sta ik dan voor
 de klas bij Fontys ICT, in het ICT InnovationLab op Strijp-T in Eindhoven, en
 er begint een nieuwe lichting studenten aan hun opdrachten. We hebben vier jaar
 om ze drie dingen mee te geven die lastiger zijn dan welk algoritme ook: dat

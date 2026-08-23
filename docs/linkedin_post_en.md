@@ -36,7 +36,7 @@ measuring.
 That is the ratio: AI accelerates what you can already do. It does not replace
 it.
 
-Next week the building opens again. Three days a week I teach at Fontys ICT,
+This week the building opens again. Three days a week I teach at Fontys ICT,
 in the ICT InnovationLab on Strijp-T in Eindhoven, and a new intake of students
 starts on their assignments. We get four years to land three things that are
 harder than any algorithm: that a problem usually has more than one good
