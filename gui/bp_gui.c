@@ -862,6 +862,44 @@ s_draw_controls(s_app_t *app)
 }
 
 /*
+ * Picks the windowing backend and returns the name it settled on.
+ *
+ * GLFW prefers Wayland when WAYLAND_DISPLAY is set, and under WSLg that is the
+ * broken path: its EGL cannot find a driver, falls back to zink, finds no
+ * device, and the window ends up in the taskbar drawing nothing. Rendering is
+ * fine either way - a framebuffer capture comes out correct - so the failure
+ * is only in presenting, which makes it maddening to diagnose from inside.
+ *
+ * X11 through XWayland has none of that and works on native Wayland desktops
+ * too, so it is the default. Pass --platform to override.
+ */
+static const char *
+s_select_platform(const char *requested)
+{
+#ifdef GLFW_PLATFORM
+    if (requested && strcmp(requested, "auto") == 0) {
+        glfwInitHint(GLFW_PLATFORM, GLFW_ANY_PLATFORM);
+        return "auto";
+    }
+    if (requested && strcmp(requested, "wayland") == 0) {
+        if (glfwPlatformSupported(GLFW_PLATFORM_WAYLAND)) {
+            glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_WAYLAND);
+            return "wayland";
+        }
+        (void) fprintf(stderr, "bp_gui: no Wayland support, using default\n");
+        return "auto";
+    }
+    if (glfwPlatformSupported(GLFW_PLATFORM_X11)) {
+        glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+        return "x11";
+    }
+#else
+    (void) requested;
+#endif
+    return "auto";
+}
+
+/*
  * Writes the framebuffer as a binary PPM and reports whether it worked.
  *
  * PPM because it is eight lines of code and no dependency; the Python tooling
@@ -906,6 +944,8 @@ main(int argc, char **argv)
 {
     static s_app_t app;
     const char *shot_path = NULL;
+    const char *requested_platform = NULL;
+    const char *platform;
     int shot_after_frames = 0;
     int frame = 0;
     int argument;
@@ -935,9 +975,13 @@ main(int argc, char **argv)
         } else if (strcmp(argv[argument], "--frames") == 0
             && argument + 1 < argc) {
             shot_after_frames = atoi(argv[++argument]);
+        } else if (strcmp(argv[argument], "--platform") == 0
+            && argument + 1 < argc) {
+            requested_platform = argv[++argument];
         } else if (argv[argument][0] == '-') {
             (void) fprintf(stderr,
-                "usage: bp_gui [job-file] [--shot <file.ppm>] [--frames <n>]\n");
+                "usage: bp_gui [job-file] [--platform x11|wayland|auto]\n"
+                "              [--shot <file.ppm>] [--frames <n>]\n");
             return 1;
         } else {
             (void) snprintf(app.job_path, sizeof app.job_path, "%s",
@@ -945,6 +989,7 @@ main(int argc, char **argv)
         }
     }
 
+    platform = s_select_platform(requested_platform);
     if (!glfwInit()) {
         (void) fprintf(stderr, "bp_gui: cannot initialise GLFW\n");
         return 1;
@@ -980,6 +1025,9 @@ main(int argc, char **argv)
     s_load(&app);
     if (app.job)
         s_pack(&app);
+    /* Worth showing: it is the first thing to change when nothing appears. */
+    (void) snprintf(app.status + strlen(app.status),
+        sizeof app.status - strlen(app.status), "  [%s]", platform);
 
     while (!app.quit) {
         int width = 0;

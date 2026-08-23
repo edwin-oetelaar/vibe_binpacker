@@ -213,6 +213,24 @@ Quitting with a packing you have not saved asks first, whether you use the
 menu, the shortcut or the window button; quitting with nothing to lose just
 quits.
 
+### If the window appears in the taskbar but stays blank
+
+That is the Wayland path failing, and WSLg is where it shows up. GLFW prefers
+Wayland whenever `WAYLAND_DISPLAY` is set; under WSLg its EGL cannot find a
+driver, falls back to zink, finds no device, and presents nothing. The
+give-away is a console full of
+
+    libEGL warning: failed to get driver name for fd -1
+    MESA: error: ZINK: failed to choose pdev
+
+and a window titled `[WARN: COPY MODE]`. Rendering itself is fine either way -
+a `--shot` capture comes out correct - which makes it awkward to diagnose from
+inside the program.
+
+The viewer therefore asks for **X11** by default, which works under WSLg and
+on native Wayland desktops through XWayland alike. `--platform wayland` and
+`--platform auto` override it, and the status line shows which one is in use.
+
 The viewer is the only part of this project with a third-party dependency, and
 it is fenced off: `pixi run test`, `pixi run demo` and `pixi run benchmark`
 never touch it, and [tools/fetch_gui_deps.sh](tools/fetch_gui_deps.sh) pins the
