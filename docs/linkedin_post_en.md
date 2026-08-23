@@ -36,14 +36,15 @@ measuring.
 That is the ratio: AI accelerates what you can already do. It does not replace
 it.
 
-Three days a week I teach at Fontys ICT, in the ICT InnovationLab on Strijp-T
-in Eindhoven. We get four years to land three things
-that are harder than any algorithm: that a problem usually has more than one
-good answer, that you have to get things wrong to learn anything, and that
-making progress usually beats waiting for the perfect answer.
+Next week the building opens again. Three days a week I teach at Fontys ICT,
+in the ICT InnovationLab on Strijp-T in Eindhoven, and a new intake of students
+starts on their assignments. We get four years to land three things that are
+harder than any algorithm: that a problem usually has more than one good
+answer, that you have to get things wrong to learn anything, and that making
+progress usually beats waiting for the perfect answer.
 
-This repository is that lesson. It is all in there, including the results that
-disappointed.
+This is what came of my summer holiday, and it is exactly that lesson. It is
+all in there, including the results that disappointed.
 
 If you have a problem like this lying around, incidentally, it makes excellent
 student material: real constraints, real material, no answer in the back of the

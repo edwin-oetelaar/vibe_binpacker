@@ -35,15 +35,16 @@ opgeleverd. Dertig jaar ervaring is wat erop stond dat er gemeten werd.
 Dat is de verhouding: AI is een versneller van wat je al kunt, geen vervanging
 ervan.
 
-Drie dagen per week sta ik voor de klas bij Fontys ICT, in het ICT
-InnovationLab op Strijp-T in Eindhoven. We hebben vier jaar om
-studenten drie dingen mee te geven die lastiger zijn dan welk algoritme ook:
-dat een probleem meestal meer dan één goed antwoord heeft, dat je fouten moet
-maken om te leren, en dat voortgang boeken doorgaans meer waard is dan wachten
-op het perfecte antwoord.
+Volgende week gaat het gebouw weer open. Drie dagen per week sta ik dan voor
+de klas bij Fontys ICT, in het ICT InnovationLab op Strijp-T in Eindhoven, en
+er begint een nieuwe lichting studenten aan hun opdrachten. We hebben vier jaar
+om ze drie dingen mee te geven die lastiger zijn dan welk algoritme ook: dat
+een probleem meestal meer dan één goed antwoord heeft, dat je fouten moet maken
+om te leren, en dat voortgang boeken doorgaans meer waard is dan wachten op het
+perfecte antwoord.
 
-Deze repo is precies die les. Alles staat erin, inclusief de metingen die
-tegenvielen.
+Dit is wat er van mijn zomervakantie is gekomen, en het is precies die les.
+Alles staat erin, inclusief de metingen die tegenvielen.
 
 Heb je zo'n probleem liggen, dan is het trouwens uitstekend studentenmateriaal:
 echte randvoorwaarden, echt materiaal, geen antwoord achterin het boek. Dat

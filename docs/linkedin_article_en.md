@@ -33,8 +33,8 @@ cost you money.
 
 ## Same problem, different material
 
-Recently I built that problem again, in the open this time: a 2D nesting
-solver that arranges parts on a sheet so that as little as possible is left
+Over this summer holiday I built that problem again, in the open this time: a
+2D nesting solver that arranges parts on a sheet so that as little as possible is left
 over. Arbitrary shapes, holes, quarter turns, and a guaranteed gap between
 parts. Sheet metal rather than circuit boards, but it is the same question:
 how do you get the most value out of one piece of raw material.
@@ -99,8 +99,10 @@ could try far more things.
 
 ## Four years, and more than one right answer
 
-Three days a week I teach at Fontys ICT, in software engineering and
-information technology. Not on a campus, but in the Fontys ICT InnovationLab
+Next week the building opens again and a new intake starts on their
+assignments. Three days a week I teach at Fontys ICT, in software engineering
+and information technology. Not on a campus, but in the Fontys ICT
+InnovationLab
 on Strijp-T in Eindhoven: some 4,000 m² where education, research and industry
 sit on the same floor, and where students work on real questions alongside
 researchers and outside partners. I am mostly in the Smart Systems Lab,
@@ -117,7 +119,8 @@ than one good answer, that you have to get things wrong in order to learn
 anything, and that making progress is generally worth more than waiting for
 the perfect answer.
 
-This project is that lesson with the numbers attached. Six times the obvious
+This project is what came of my summer holiday, and it is that lesson with the
+numbers attached. Six times the obvious
 approach turned out to be wrong. All of it is written down, because the wrong
 turns are precisely the part you learn from. Anyone who only ever sees
 finished results learns that software comes out right first time. That is the

@@ -33,8 +33,8 @@ alsnog geld kosten.
 
 ## Hetzelfde probleem, ander materiaal
 
-Onlangs heb ik dat probleem opnieuw gebouwd, in de open lucht ditmaal: een
-2D-nesting solver die onderdelen zo op een plaat legt dat er zo min mogelijk
+Deze zomervakantie heb ik dat probleem opnieuw gebouwd, dit keer open source:
+een 2D-nesting solver die onderdelen zo op een plaat legt dat er zo min mogelijk
 overblijft. Willekeurige vormen, gaten, kwartslagen, en een gegarandeerde
 tussenruimte tussen de onderdelen. Plaatwerk in plaats van printplaten, maar
 het is dezelfde vraag: hoe krijg je zoveel mogelijk waarde uit één stuk
@@ -103,9 +103,10 @@ meer heb kunnen uitproberen.
 
 ## Vier jaar, en meerdere goede antwoorden
 
-Drie dagen per week sta ik voor de klas bij Fontys ICT, bij software
-engineering en informatietechnologie. Niet op een campus, maar in het Fontys
-ICT InnovationLab op Strijp-T in Eindhoven: zo'n 4.000 m² waar onderwijs,
+Volgende week gaat het gebouw weer open en begint er een nieuwe lichting aan
+hun opdrachten. Drie dagen per week sta ik dan voor de klas bij Fontys ICT, bij
+software engineering en informatietechnologie. Niet op een campus, maar in het
+Fontys ICT InnovationLab op Strijp-T in Eindhoven: zo'n 4.000 m² waar onderwijs,
 onderzoek en bedrijfsleven op dezelfde vloer zitten, en waar studenten met
 onderzoekers en externe partners aan echte vraagstukken werken. Zelf zit ik
 vooral in het Smart Systems Lab, waar ik aan robots werk en aan perceptie met
@@ -122,7 +123,8 @@ meestal meer dan één goed antwoord heeft, dat je fouten moet maken om iets te
 leren, en dat voortgang boeken doorgaans meer waard is dan wachten op het
 perfecte antwoord.
 
-Dit project is precies die les, met de cijfers erbij. Zes keer bleek de voor
+Dit project is wat er van mijn zomervakantie is gekomen, en het is precies die
+les, met de cijfers erbij. Zes keer bleek de voor
 de hand liggende aanpak fout. Dat staat er allemaal in, want de verkeerde
 afslagen zijn nu juist het deel waar je iets van leert. Wie alleen
 eindresultaten ziet, leert dat software in één keer goed komt. Dat is de
