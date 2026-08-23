@@ -316,28 +316,22 @@ than assume. This repository is what that looks like in practice: benchmarks
 before claims, negative results kept, and a checker that does not trust the
 solver.
 
-<!-- CONTACT DETAILS: fill this in before publishing -->
-
 > ### Get in touch
 >
-> **_This box still needs to be filled in._**
+> **Edwin van den Oetelaar** — independent software developer, Netherlands
 >
-> - **Edwin van den Oetelaar** — independent software developer, Netherlands
-> - Email: _to be added_
-> - LinkedIn: _to be added_
-> - Website: _to be added_
-> - Phone: _to be added_
+> - Email: **[edwin@oetelaar.com](mailto:edwin@oetelaar.com)**
+> - Phone: **[+31 6 5332 9077](tel:+31653329077)**
+> - Web: **[oetelaar.com](https://www.oetelaar.com/)**
+> - LinkedIn: **[linkedin.com/in/oetelaar](https://www.linkedin.com/in/oetelaar/)**
 >
-> Happy to talk through a concrete case: what you cut, on what, in what
+> Happy to talk through a concrete case: what you cut, out of what, in what
 > volumes, and where the waste is now.
 
 ## Licence
 
-<!-- LICENCE: choose one and add a LICENSE file before publishing -->
-
-_Not yet chosen._ Until a `LICENSE` file is added, default copyright applies
-and no permission to reuse is granted. If you want to use this, get in touch
-and it will be sorted out quickly.
+[MIT](LICENSE) — use it, change it, ship it, commercially or otherwise. Keep
+the copyright notice with it and it is yours to do as you like with.
 
 ## Conventions
 
