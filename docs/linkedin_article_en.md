@@ -144,6 +144,25 @@ I still enjoy these puzzles after all these years. But the return is not in the
 puzzle. It is in understanding the process around it, and in measuring whether
 it works.
 
+### Two ways to go about it
+
+If you have a well-defined challenge and want a concrete result quickly, I do
+it myself. That is commercial work, in my own time, and it goes the way this
+project went: measure, show what comes out, and only claim something once there
+is a number under it.
+
+The other route is a student research project, with me supervising the
+content. That works differently, and it is only fair to say so up front:
+students have to learn from it first and foremost. They need time to explore
+the fundamentals and to get to know your domain, and that takes months where I
+would take weeks. What you get in return is something hiring cannot give you:
+you watch young engineers work on your real problem for half a year, which is
+one of the better ways there is to scout new people.
+
+Which route fits depends on what you need. If there is time pressure, or the
+result is critical, the first one is the sensible choice. If you have room and
+you are also looking for new talent, the second is worth considering.
+
 The whole repository is open, MIT licensed, including the results that
 disappointed. A repository that shows only what worked tells you very little
 about how to get there.

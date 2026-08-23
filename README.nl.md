@@ -355,6 +355,25 @@ Deze repository hoort bij allebei. Een klant kan erin zien hoe ik werk. Een
 student kan erin zien dat een probleem meestal meer dan één goed antwoord
 heeft, en dat de verkeerde afslagen het deel zijn waar je iets van leert.
 
+### Twee manieren om dit aan te pakken
+
+Heb je een duidelijk afgebakende uitdaging en wil je snel een concreet
+resultaat, dan doe ik het zelf. Dat is commercieel werk, in mijn eigen tijd, en
+het gaat zoals dit project ging: meten, laten zien wat eruit komt, en pas iets
+beweren als er een getal onder ligt.
+
+De andere weg is een onderzoeksproject met studenten, waarbij ik ze inhoudelijk
+begeleid. Dat werkt anders, en het is niet meer dan eerlijk om dat vooraf te
+zeggen: studenten moeten er in de eerste plaats van leren. Ze hebben tijd nodig
+om de basis te verkennen en om jouw domein te leren kennen, en dat kost maanden
+waar ik weken zou doen. Daar staat iets tegenover wat je met inhuren niet
+krijgt: je ziet jonge engineers een half jaar lang werken aan jouw echte
+probleem, en dat is een van de betere manieren om nieuwe mensen te scouten.
+
+Welke route past, hangt af van wat je nodig hebt. Zit er haast op, of is het
+resultaat kritisch, dan is de eerste de verstandige. Heb je ruimte en zoek je
+ook aanwas, dan is de tweede het overwegen waard.
+
 > ### Neem contact op
 >
 > **Edwin van den Oetelaar** — zelfstandig softwareontwikkelaar, Nederland
