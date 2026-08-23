@@ -44,6 +44,13 @@ op het perfecte antwoord.
 Deze repo is precies die les. Alles staat erin, inclusief de metingen die
 tegenvielen.
 
+Heb je zo'n probleem liggen, dan is het trouwens uitstekend studentenmateriaal:
+echte randvoorwaarden, echt materiaal, geen antwoord achterin het boek. Dat
+soort onderzoeksprojecten begeleid ik inhoudelijk. Het gaat langzamer dan
+wanneer ik het zelf doe, want studenten moeten er van leren en dat is nu juist
+de bedoeling. Wat je ervoor terugkrijgt is een half jaar meekijken met jonge
+engineers die in jouw probleem zitten.
+
 → github.com/edwin-oetelaar/vibe_binpacker
 
 #optimalisatie #operationsresearch #maakindustrie #PCB #nesting #onderwijs

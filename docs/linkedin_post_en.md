@@ -44,6 +44,13 @@ making progress usually beats waiting for the perfect answer.
 This repository is that lesson. It is all in there, including the results that
 disappointed.
 
+If you have a problem like this lying around, incidentally, it makes excellent
+student material: real constraints, real material, no answer in the back of the
+book. I supervise those research projects on content. It goes slower than when
+I do it myself, because students have to learn from it and that is rather the
+point. What you get back is half a year of watching young engineers work inside
+your problem.
+
 → github.com/edwin-oetelaar/vibe_binpacker
 
 #optimization #operationsresearch #manufacturing #PCB #nesting #engineeringeducation
