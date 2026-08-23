@@ -900,6 +900,66 @@ s_select_platform(const char *requested)
 }
 
 /*
+ * Prints what the window and the driver actually are.
+ *
+ * A viewer runs on someone else's machine, and when nothing appears there is
+ * nothing to go on from the inside: the render loop looks healthy, the
+ * framebuffer reads back correct, and the screen stays empty. This prints the
+ * handful of facts that separate the possible causes - which backend, which
+ * driver, where the window thinks it is, and whether frames are actually being
+ * produced.
+ */
+static void
+s_diagnose(GLFWwindow *window, const char *platform, int frames, double seconds)
+{
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+    int framebuffer_width = 0;
+    int framebuffer_height = 0;
+    int alpha_bits = 0;
+    GLFWmonitor *monitor;
+
+    (void) fprintf(stderr, "platform     %s\n", platform);
+    (void) fprintf(stderr, "GL vendor    %s\n", (const char *) glGetString(GL_VENDOR));
+    (void) fprintf(stderr, "GL renderer  %s\n", (const char *) glGetString(GL_RENDERER));
+    (void) fprintf(stderr, "GL version   %s\n", (const char *) glGetString(GL_VERSION));
+
+    glfwGetWindowPos(window, &x, &y);
+    glfwGetWindowSize(window, &width, &height);
+    glfwGetFramebufferSize(window, &framebuffer_width, &framebuffer_height);
+    glGetIntegerv(GL_ALPHA_BITS, &alpha_bits);
+    (void) fprintf(stderr, "window       %d x %d at (%d, %d)\n", width, height,
+        x, y);
+    (void) fprintf(stderr, "framebuffer  %d x %d, %d alpha bits\n",
+        framebuffer_width, framebuffer_height, alpha_bits);
+    (void) fprintf(stderr, "visible      %d, iconified %d, focused %d\n",
+        glfwGetWindowAttrib(window, GLFW_VISIBLE),
+        glfwGetWindowAttrib(window, GLFW_ICONIFIED),
+        glfwGetWindowAttrib(window, GLFW_FOCUSED));
+
+    monitor = glfwGetPrimaryMonitor();
+    if (monitor) {
+        int area_x = 0;
+        int area_y = 0;
+        int area_width = 0;
+        int area_height = 0;
+
+        glfwGetMonitorWorkarea(monitor, &area_x, &area_y, &area_width,
+            &area_height);
+        (void) fprintf(stderr, "monitor      %d x %d at (%d, %d)\n",
+            area_width, area_height, area_x, area_y);
+    } else {
+        (void) fprintf(stderr, "monitor      none reported\n");
+    }
+
+    if (seconds > 0.0)
+        (void) fprintf(stderr, "frames       %d in %.1f s (%.1f per second)\n",
+            frames, seconds, frames / seconds);
+}
+
+/*
  * Writes the framebuffer as a binary PPM and reports whether it worked.
  *
  * PPM because it is eight lines of code and no dependency; the Python tooling
@@ -946,6 +1006,8 @@ main(int argc, char **argv)
     const char *shot_path = NULL;
     const char *requested_platform = NULL;
     const char *platform;
+    int diagnose = 0;
+    double diagnose_started = 0.0;
     int shot_after_frames = 0;
     int frame = 0;
     int argument;
@@ -978,10 +1040,13 @@ main(int argc, char **argv)
         } else if (strcmp(argv[argument], "--platform") == 0
             && argument + 1 < argc) {
             requested_platform = argv[++argument];
+        } else if (strcmp(argv[argument], "--diagnose") == 0) {
+            diagnose = 1;
         } else if (argv[argument][0] == '-') {
             (void) fprintf(stderr,
                 "usage: bp_gui [job-file] [--platform x11|wayland|auto]\n"
-                "              [--shot <file.ppm>] [--frames <n>]\n");
+                "              [--diagnose] [--shot <file.ppm>] "
+                "[--frames <n>]\n");
             return 1;
         } else {
             (void) snprintf(app.job_path, sizeof app.job_path, "%s",
@@ -1028,6 +1093,9 @@ main(int argc, char **argv)
     /* Worth showing: it is the first thing to change when nothing appears. */
     (void) snprintf(app.status + strlen(app.status),
         sizeof app.status - strlen(app.status), "  [%s]", platform);
+
+    if (diagnose)
+        diagnose_started = glfwGetTime();
 
     while (!app.quit) {
         int width = 0;
@@ -1087,7 +1155,7 @@ main(int argc, char **argv)
         ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData());
 
         /* Capture before the swap, while the frame is still the back buffer. */
-        if (shot_path && ++frame >= shot_after_frames) {
+        if (shot_path && frame + 1 >= shot_after_frames) {
             if (!s_write_shot(shot_path, width, height))
                 (void) fprintf(stderr, "bp_gui: cannot write %s\n",
                     shot_path);
@@ -1095,6 +1163,14 @@ main(int argc, char **argv)
             break;
         }
         glfwSwapBuffers(window);
+        ++frame;
+
+        /* Report after a few seconds of real frames, then leave. */
+        if (diagnose && glfwGetTime() - diagnose_started >= 3.0) {
+            s_diagnose(window, platform, frame,
+                glfwGetTime() - diagnose_started);
+            break;
+        }
     }
 
     ImGui_ImplOpenGL3_Shutdown();
