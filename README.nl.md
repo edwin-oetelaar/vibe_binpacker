@@ -343,6 +343,18 @@ praktijk uitziet: eerst meten en dan pas iets beweren, tegenvallende
 uitkomsten laten staan, en een controleprogramma dat de solver niet op zijn
 woord gelooft.
 
+Mijn week is verdeeld. Drie dagen sta ik voor de klas bij Fontys ICT, bij
+software engineering en informatietechnologie. De andere twee bouw ik zelf, op
+het grensvlak van wat er kan, met AI en robots — en het mooiste vind ik het
+als dat de praktijk haalt. In Brainport grenst de theorie van informatica en
+wiskunde aan een regio die daadwerkelijk dingen maakt, en praktische engineers
+zijn wat die twee werelden verbindt. Dat probeer ik studenten mee te geven, en
+het is ook precies wat ik voor klanten doe.
+
+Deze repository hoort bij allebei. Een klant kan erin zien hoe ik werk. Een
+student kan erin zien dat een probleem meestal meer dan één goed antwoord
+heeft, en dat de verkeerde afslagen het deel zijn waar je iets van leert.
+
 > ### Neem contact op
 >
 > **Edwin van den Oetelaar** — zelfstandig softwareontwikkelaar, Nederland

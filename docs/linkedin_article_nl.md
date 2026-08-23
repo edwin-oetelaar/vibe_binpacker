@@ -1,7 +1,7 @@
 # De printplaat van vijf euro ging niet vanzelf
 
 *Wat panelisatie, plaatmateriaal en dertig jaar ervaring met elkaar te maken
-hebben — en waar AI in dat plaatje past.*
+hebben — en waar AI, en een klas vol studenten, in dat plaatje passen.*
 
 **Omslagafbeelding:** `docs/comparison_nl.png`
 
@@ -101,9 +101,33 @@ weet het" van dagen naar minuten gaat. Ik heb in dit project meer geleerd over
 nesting dan in de jaren dat ik het met de hand deed, simpelweg omdat ik veel
 meer heb kunnen uitproberen.
 
-Ik geef daarnaast parttime les bij Fontys ICT, en daar verschuift de grond
-minstens zo hard. Dat is ook waarom ik dit soort dingen zelf blijf bouwen. Je
-kunt niet uitleggen wat er verandert als je het niet zelf in handen hebt gehad.
+## Vier jaar, en meerdere goede antwoorden
+
+Drie dagen per week sta ik voor de klas bij Fontys ICT, bij software
+engineering en informatietechnologie. De andere twee dagen bouw ik zelf, op
+het grensvlak van wat er kan — AI en robots, en het mooiste vind ik het als
+dat de praktijk haalt. Die verdeling houd ik al jaren aan, omdat de ene helft
+de andere scherp houdt. Je kunt niet uitleggen wat er verandert als je het
+niet zelf in handen hebt gehad.
+
+We hebben vier jaar met deze studenten. Vier jaar om drie dingen over te
+brengen die een stuk lastiger zijn dan welk algoritme ook: dat een probleem
+meestal meer dan één goed antwoord heeft, dat je fouten moet maken om iets te
+leren, en dat voortgang boeken doorgaans meer waard is dan wachten op het
+perfecte antwoord.
+
+Dit project is precies die les, met de cijfers erbij. Zes keer bleek de voor
+de hand liggende aanpak fout. Dat staat er allemaal in, want de verkeerde
+afslagen zijn nu juist het deel waar je iets van leert. Wie alleen
+eindresultaten ziet, leert dat software in één keer goed komt. Dat is de
+duurste illusie die je iemand mee kunt geven.
+
+We zitten in Brainport, waar de theorie van informatica en wiskunde grenst aan
+een regio die daadwerkelijk dingen máákt. Praktische engineers zijn wat die
+twee werelden verbindt, en daar zit de impact. Ik doe dat met een team van
+internationale collega's die allemaal zelf in het vak hebben gestaan — daarom
+kunnen ze studenten vertellen wat er echt gebeurt in plaats van wat er hoort
+te gebeuren. Het is leuk werk, en het is serieus werk.
 
 ## Waar een algoritme ophoudt
 
@@ -137,5 +161,6 @@ Snij je zelf onderdelen uit voorraadmateriaal, of combineer je orders op een
 paneel, en heb je het vermoeden dat daar nog wat te halen valt? Ik praat er
 graag over door.
 
-**Edwin van den Oetelaar** — zelfstandig softwareontwikkelaar
+**Edwin van den Oetelaar** — docent bij Fontys ICT, uitvinder en zelfstandig
+softwareontwikkelaar
 edwin@oetelaar.com · 06 5332 9077 · [oetelaar.com](https://www.oetelaar.com/)

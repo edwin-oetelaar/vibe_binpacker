@@ -316,6 +316,18 @@ than assume. This repository is what that looks like in practice: benchmarks
 before claims, negative results kept, and a checker that does not trust the
 solver.
 
+My week is split. Three days I teach at Fontys ICT, in software engineering
+and information technology. The other two I build, at the edge of what is
+possible, with AI and robots — and what I enjoy most is when that reaches the
+factory floor. In Brainport the theory of computer science and mathematics
+borders on a region that actually makes things, and practical engineers are
+what connects those two worlds. That is what I try to give students, and it is
+exactly what I do for clients.
+
+This repository belongs to both. A client can see how I work. A student can
+see that a problem usually has more than one good answer, and that the wrong
+turns are the part you learn from.
+
 > ### Get in touch
 >
 > **Edwin van den Oetelaar** — independent software developer, Netherlands

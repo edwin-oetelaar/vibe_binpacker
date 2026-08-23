@@ -36,8 +36,14 @@ measuring.
 That is the ratio: AI accelerates what you can already do. It does not replace
 it.
 
-It is all in there, including the results that disappointed.
+Three days a week I teach at Fontys ICT. We get four years to land three things
+that are harder than any algorithm: that a problem usually has more than one
+good answer, that you have to get things wrong to learn anything, and that
+making progress usually beats waiting for the perfect answer.
+
+This repository is that lesson. It is all in there, including the results that
+disappointed.
 
 → github.com/edwin-oetelaar/vibe_binpacker
 
-#optimization #operationsresearch #manufacturing #PCB #nesting
+#optimization #operationsresearch #manufacturing #PCB #nesting #engineeringeducation

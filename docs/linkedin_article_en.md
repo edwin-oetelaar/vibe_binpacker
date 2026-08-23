@@ -1,7 +1,7 @@
 # The five-euro circuit board did not happen by itself
 
 *What panelisation, sheet metal and thirty years of experience have to do with
-each other — and where AI actually fits.*
+each other — and where AI, and a room full of students, fit in.*
 
 **Cover image:** `docs/comparison_en.png`
 
@@ -97,9 +97,33 @@ something" and "I know" drops from days to minutes. I learned more about
 nesting in this project than in the years I did it by hand, simply because I
 could try far more things.
 
-I also teach part time at Fontys ICT, where the ground shifts at least as
-fast. That is another reason I keep building things like this myself. You
-cannot explain what is changing if you have not had it in your hands.
+## Four years, and more than one right answer
+
+Three days a week I teach at Fontys ICT, in software engineering and
+information technology. The other two I build, at the edge of what is
+possible — AI and robots, and what I enjoy most is when that reaches the
+factory floor. I have kept that split for years, because each half keeps the
+other honest. You cannot explain what is changing if you have not had it in
+your hands.
+
+We get four years with these students. Four years to land three things that
+are considerably harder than any algorithm: that a problem usually has more
+than one good answer, that you have to get things wrong in order to learn
+anything, and that making progress is generally worth more than waiting for
+the perfect answer.
+
+This project is that lesson with the numbers attached. Six times the obvious
+approach turned out to be wrong. All of it is written down, because the wrong
+turns are precisely the part you learn from. Anyone who only ever sees
+finished results learns that software comes out right first time. That is the
+most expensive illusion you can hand someone.
+
+We sit in Brainport, where the theory of computer science and mathematics
+borders on a region that actually makes things. Practical engineers are what
+connects those two worlds, and that is where the impact is. I do it alongside
+a team of international colleagues who have all worked in industry themselves,
+which is why they can tell students what really happens rather than what is
+supposed to happen. It is enjoyable work, and it is serious work.
 
 ## Where an algorithm stops
 
@@ -131,5 +155,6 @@ about how to get there.
 Do you cut parts from stock material, or combine orders on a panel, and
 suspect there is something left on the table? I am happy to talk it through.
 
-**Edwin van den Oetelaar** — independent software developer
+**Edwin van den Oetelaar** — lecturer at Fontys ICT, inventor and independent
+software developer
 edwin@oetelaar.com · +31 6 5332 9077 · [oetelaar.com](https://www.oetelaar.com/)
