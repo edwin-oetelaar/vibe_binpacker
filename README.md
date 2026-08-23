@@ -73,8 +73,8 @@ already right and the layout merely needs to settle.
 pixi run demo
 ```
 
-That packs three jobs onto a 1200 x 1200 mm plate with 1 mm between parts and
-writes an SVG of each:
+That packs the example jobs onto a 1200 x 1200 mm plate with 1 mm between parts and
+writes an SVG of each into `build/`:
 
 - [jobs/demo.job](jobs/demo.job) - 36 rectangles.
 - [jobs/shapes.job](jobs/shapes.job) - L shapes, triangles, a square frame and
@@ -119,41 +119,68 @@ worse than ignoring it.
 
 ## Layout
 
-Built and tested:
+    include/        every public header, one per module
+    src/            the solver, one implementation file per header
+    apps/           bp_pack (the CLI) and bp_bench (the benchmark)
+    tests/          one test program per module
+    gui/            the viewer; the only third-party dependency
+    jobs/           example job files
+    tools/          Python tooling and the GUI dependency fetcher
+    build/          everything the build produces
 
-    bp_contract.h     fail-fast contract macro
-    bp_bitmap.[ch]    bitboard rows, shifts, span queries, counts
-    bp_mask.[ch]      part footprint as row spans, blit, overlap
-    bp_polygon.[ch]   rings, validation, simplicity, bounds, rotation
-    bp_raster.[ch]    conservative fill, growth for clearance
-    bp_place.[ch]     placement search in three modes, and every feasible
-                      position at a height
-    bp_nester.[ch]    sequence decoder, bottom-left-fill
-    bp_score.[ch]     contact measure and ranked position choice
-    bp_penetration.[ch] weighted cell counts with per-row running totals
-    bp_separate.[ch]  guided local search that resolves overlap
-    bp_search.[ch]    ruin and recreate, then squeezing, on a time budget
-    bp_job.[ch]       job file loading and mask construction
-    bp_svg.[ch]       solution to SVG
-    bp_pack.c         CLI
-    bp_bench.c        repeatable benchmark
-    tools/            Python tooling
+The solver is one module per pair of files:
 
-    gui/bp_gui.c      viewer, in C, on cimgui and GLFW
+    bp_contract     fail-fast contract macro
+    bp_bitmap       bitboard rows, shifts, span queries, counts
+    bp_mask         part footprint as row spans, blit, overlap
+    bp_polygon      rings, validation, simplicity, bounds, rotation
+    bp_raster       conservative fill, growth for clearance
+    bp_place        placement search in three modes, and every feasible
+                    position at a height
+    bp_nester       sequence decoder, bottom-left-fill
+    bp_score        contact measure and ranked position choice
+    bp_penetration  weighted cell counts with per-row running totals
+    bp_separate     guided local search that resolves overlap
+    bp_search       ruin and recreate, then squeezing, on a time budget
+    bp_job          job file loading and mask construction
+    bp_svg          solution to SVG
 
 ## Build
 
-Everything runs through Pixi on Linux:
+Everything comes from [Pixi](https://pixi.sh), so the only prerequisite is
+Pixi itself; the compiler, Python and the GUI libraries all come from the
+environment it creates. Linux only so far.
 
 ```sh
 pixi run test
 ```
 
-```sh
-pixi run test-sanitize
-```
+That builds the solver and runs every test. The first run also creates the
+environment, which takes a minute.
 
-The other tasks are `build`, `demo`, `benchmark` and `clean`.
+| task | what it does |
+| ---- | ------------ |
+| `pixi run build` | compiles the programs and the tests |
+| `pixi run test` | builds and runs every test |
+| `pixi run test-sanitize` | the same under AddressSanitizer and UndefinedBehaviorSanitizer |
+| `pixi run demo` | packs the example jobs and re-checks every result |
+| `pixi run benchmark` | sweeps cell size and search mode, prints CSV |
+| `pixi run fetch-gui-deps` | clones the viewer's pinned dependencies |
+| `pixi run gui` | builds the viewer |
+| `pixi run clean` | `rm -rf build` |
+
+Everything the build produces goes under `build/` and nothing else does, so
+cleaning is a plain directory removal and the source tree never fills with
+objects. Programs land in `build/bp_pack`, `build/bp_bench` and
+`build/bp_gui`.
+
+Plain `make` works too if you would rather bring your own toolchain: the
+Makefile assumes nothing but a C11 compiler, and `make gui` additionally needs
+GLFW and the OpenGL headers.
+
+Compiler flags are fixed at `-std=c11 -Wall -Wextra -Werror -pedantic`, and
+tests are found by wildcard, so adding `tests/test_something.c` is enough to
+have it built and run.
 
 ## The viewer
 
@@ -169,7 +196,7 @@ pixi run fetch-gui-deps
 pixi run gui
 ```
 
-then `./bp_gui jobs/shapes.job`. Drag to pan, wheel to zoom, and drag the step
+then `./build/bp_gui jobs/shapes.job`. Drag to pan, wheel to zoom, and drag the step
 slider to replay the placement order, which is the fastest way to watch a
 heuristic make a bad decision. The controls re-pack without restarting.
 
@@ -183,14 +210,14 @@ straight into the ImGui draw list, so there are no shaders and no textures:
 `bp_mask_run_height` turns a footprint into a handful of rectangles and those
 go into the list.
 
-`./bp_gui <job> --shot frame.ppm --frames 12` renders a few frames, writes the
+`./build/bp_gui <job> --shot frame.ppm --frames 12` renders a few frames, writes the
 framebuffer and exits, which is how a window gets checked from a script. A GUI
 that builds is not a GUI that draws.
 
 To search rather than make a single pass, give `bp_pack` a budget:
 
 ```sh
-./bp_pack --time 10 --svg out.svg jobs/dense.job
+./build/bp_pack --time 10 --svg out.svg jobs/dense.job
 ```
 
 `--search <rounds>` bounds it by rounds instead, and `--compact <fraction>`

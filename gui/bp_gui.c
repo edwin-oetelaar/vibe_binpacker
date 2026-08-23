@@ -539,6 +539,12 @@ main(int argc, char **argv)
     (void) igCreateContext(NULL);
     io = igGetIO();
     io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    /*
+     * No imgui.ini. Both windows are positioned and sized every frame, so
+     * there is nothing to remember, and a settings file dropped next to
+     * whatever directory you happened to run from is just litter.
+     */
+    io->IniFilename = NULL;
     igStyleColorsDark(NULL);
     (void) ImGui_ImplGlfw_InitForOpenGL(window, true);
     (void) ImGui_ImplOpenGL3_Init("#version 130");

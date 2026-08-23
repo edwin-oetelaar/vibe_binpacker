@@ -368,6 +368,9 @@ Pure C11 core, no allocation in the hot path, caller-owned buffers, `bp_`
 prefix for public symbols and `s_` for file-local statics, following the
 `AGENTS.md` rules already in use in `~/tmp_codex`.
 
+Headers live in `include/`, implementations in `src/`, programs in `apps/`,
+tests in `tests/`, and every build product under `build/`.
+
 Modules marked **done** exist and are tested.
 
 | module         | responsibility                                              |

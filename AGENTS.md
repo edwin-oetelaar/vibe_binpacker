@@ -18,6 +18,21 @@ initialiser, and the optimiser is overlap minimisation by guided local search.
 Target is Linux on a normal x86-64 workstation, built inside a Pixi
 environment. The core must stay portable to plain embedded C toolchains.
 
+## Layout
+
+    include/        every public header, one per module
+    src/            the solver, one implementation file per header
+    apps/           programs: bp_pack, bp_bench
+    tests/          one test program per module, plus test_support.h
+    gui/            the viewer; the only third-party dependency
+    jobs/           example job files
+    tools/          Python tooling and the GUI dependency fetcher
+    third_party/    fetched, pinned, never committed
+    build/          everything the build produces, and nothing else
+
+Keep build output out of the source tree. `make clean` is `rm -rf build`, and
+that must remain true.
+
 ## C Style
 
 Follow Pieter Hintjens' Scalable C / Code Connected style:
@@ -68,7 +83,8 @@ failure.
 - Every public behavior needs focused deterministic tests.
 - Test normal and boundary cases, especially around 64-bit word boundaries.
 - Test fail-fast contracts on Linux with subprocess death tests.
-- Build and run with `pixi run test`.
+- Build and run with `pixi run test`. Tests are discovered by `tests/test_*.c`;
+  adding a file is enough, no Makefile edit.
 - Keep `-std=c11 -Wall -Wextra -Werror -pedantic` enabled.
 - Run `pixi run test-sanitize` for every change to indexing, shifting or
   masking. Bit manipulation across word boundaries is exactly the code that

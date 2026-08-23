@@ -1,20 +1,10 @@
-.pixi/
-gui_build/
-test_bp_bitmap
-test_bp_mask
-test_bp_polygon
-test_bp_raster
-test_bp_place
-test_bp_nester
-test_bp_score
-test_bp_search
-bp_pack
-*.svg
-bp_bench
-test_bp_penetration
-test_bp_separate
+# Everything the build produces lives here and nothing else does.
+build/
+
+# Fetched by tools/fetch_gui_deps.sh, pinned there rather than committed.
 third_party/
-gui_build/
-bp_gui
+
+# Written by Dear ImGui next to the running binary.
 imgui.ini
-*.ppm
+
+.pixi/
