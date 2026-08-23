@@ -196,9 +196,22 @@ pixi run fetch-gui-deps
 pixi run gui
 ```
 
-then `./build/bp_gui jobs/shapes.job`. Drag to pan, wheel to zoom, and drag the step
-slider to replay the placement order, which is the fastest way to watch a
-heuristic make a bad decision. The controls re-pack without restarting.
+then `./build/bp_gui jobs/shapes.job`. Drag to pan, wheel to zoom, and drag
+the step slider to replay the placement order, which is the fastest way to
+watch a heuristic make a bad decision. The controls re-pack without
+restarting.
+
+| | |
+| --- | --- |
+| `Ctrl+O` | open a job, with a small browser that lists `.job` files |
+| `Ctrl+R` | reload the current job, picking up an edited file or cell size |
+| `F5` | pack again |
+| `Ctrl+S` | write the layout as SVG |
+| `Ctrl+Q` | quit |
+
+Quitting with a packing you have not saved asks first, whether you use the
+menu, the shortcut or the window button; quitting with nothing to lose just
+quits.
 
 The viewer is the only part of this project with a third-party dependency, and
 it is fenced off: `pixi run test`, `pixi run demo` and `pixi run benchmark`

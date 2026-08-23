@@ -14,6 +14,12 @@
  * bp_mask_run_height turns a footprint into a handful of rectangles and those
  * go straight into the draw list.
  */
+/*
+ * _XOPEN_SOURCE rather than _POSIX_C_SOURCE: this toolchain's headers hide
+ * realpath behind the X/Open guard, and the file browser needs it to fold the
+ * parent steps out of a path before showing it.
+ */
+#define _XOPEN_SOURCE 700
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 
 #include "cimgui.h"
@@ -25,9 +31,12 @@
 #include "bp_place.h"
 #include "bp_score.h"
 #include "bp_search.h"
+#include "bp_svg.h"
 
 #include <GL/gl.h>
 #include <GLFW/glfw3.h>
+#include <dirent.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,6 +46,36 @@
 #define igGetIO igGetIO_Nil
 
 #define S_PATH_MAX 512U
+#define S_NAME_MAX 256U
+#define S_BROWSE_MAX 512U
+
+/* Which modal wants opening; popups can only be opened from inside a frame. */
+typedef enum {
+    S_POPUP_NONE = 0,
+    S_POPUP_OPEN = 1,
+    S_POPUP_SAVE = 2,
+    S_POPUP_QUIT = 3,
+    S_POPUP_ABOUT = 4
+} s_popup_t;
+
+/* One line of the file browser. */
+typedef struct {
+    char name[S_NAME_MAX];
+    int is_directory;
+} s_entry_t;
+
+/*
+ * A directory listing, filtered to job files. Dear ImGui has no file dialog
+ * and does not want one; a browser this small is less code than pulling in a
+ * library, and it only ever has to find a .job.
+ */
+typedef struct {
+    /* realpath writes here, and it insists on a full PATH_MAX buffer. */
+    char directory[PATH_MAX];
+    s_entry_t entries[S_BROWSE_MAX];
+    int count;
+    int selected;
+} s_browser_t;
 
 /* Distinct enough to tell neighbouring parts apart, matching the SVG writer. */
 static const ImU32 s_palette[] = {
@@ -77,6 +116,13 @@ typedef struct {
     ImVec2 pan;
     int fit_pending;
     bool show_labels;
+
+    /* Menus, dialogs and leaving. */
+    s_popup_t pending_popup;
+    s_browser_t browser;
+    char save_path[S_PATH_MAX];
+    int saved_since_pack;
+    int quit;
 } s_app_t;
 
 /* Builds an ImVec2 without needing the C++ constructor. */
@@ -218,9 +264,386 @@ s_pack(s_app_t *app)
 
     app->seconds = (double) (clock() - started) / CLOCKS_PER_SEC;
     app->step = (int) app->placement_count;
+    app->saved_since_pack = 0;
     (void) snprintf(app->status, sizeof app->status,
         "packed %u of %u parts in %.3f s", (unsigned) app->placed_count,
         (unsigned) job->part_count, app->seconds);
+}
+
+/*
+ * Joins a directory and a name into out, or returns 0 when it will not fit.
+ * Written with memcpy rather than snprintf because the compiler cannot see
+ * that a truncated path is impossible here, and a silently shortened path is
+ * exactly the kind of thing that opens the wrong file.
+ */
+static int
+s_join(char *out, size_t capacity, const char *directory, const char *name)
+{
+    size_t directory_length = strlen(directory);
+    size_t name_length = strlen(name);
+
+    if (directory_length + 1U + name_length + 1U > capacity)
+        return 0;
+    memcpy(out, directory, directory_length);
+    out[directory_length] = '/';
+    memcpy(out + directory_length + 1U, name, name_length + 1U);
+    return 1;
+}
+
+/* Orders the listing: parent first, then directories, then job files. */
+static int
+s_compare_entries(const void *first, const void *second)
+{
+    const s_entry_t *a = first;
+    const s_entry_t *b = second;
+
+    if (strcmp(a->name, "..") == 0)
+        return -1;
+    if (strcmp(b->name, "..") == 0)
+        return 1;
+    if (a->is_directory != b->is_directory)
+        return a->is_directory ? -1 : 1;
+    return strcmp(a->name, b->name);
+}
+
+/* Reports whether a name ends in the job file suffix. */
+static int
+s_is_job(const char *name)
+{
+    size_t length = strlen(name);
+
+    return length > 4U && strcmp(name + length - 4, ".job") == 0;
+}
+
+/* Reads the browser's current directory into its listing. */
+static void
+s_browser_scan(s_browser_t *browser)
+{
+    DIR *directory = opendir(browser->directory);
+    struct dirent *entry;
+
+    browser->count = 0;
+    browser->selected = -1;
+    if (!directory)
+        return;
+
+    while ((entry = readdir(directory)) != NULL
+        && browser->count < (int) S_BROWSE_MAX) {
+        char joined[PATH_MAX];
+        DIR *probe;
+        int is_directory;
+
+        if (strcmp(entry->d_name, ".") == 0)
+            continue;
+        if (!s_join(joined, sizeof joined, browser->directory, entry->d_name))
+            continue;
+
+        /* Opening it is the portable way to ask whether it is a directory. */
+        probe = opendir(joined);
+        is_directory = probe != NULL;
+        if (probe)
+            (void) closedir(probe);
+
+        if (!is_directory && !s_is_job(entry->d_name))
+            continue;
+        (void) snprintf(browser->entries[browser->count].name, S_NAME_MAX,
+            "%s", entry->d_name);
+        browser->entries[browser->count].is_directory = is_directory;
+        ++browser->count;
+    }
+    (void) closedir(directory);
+    qsort(browser->entries, (size_t) browser->count,
+        sizeof browser->entries[0], s_compare_entries);
+}
+
+/* Points the browser at a directory, resolving any parent steps in it. */
+static void
+s_browser_enter(s_browser_t *browser, const char *name)
+{
+    char joined[PATH_MAX];
+    char resolved[PATH_MAX];
+
+    if (s_join(joined, sizeof joined, browser->directory, name)
+        && realpath(joined, resolved))
+        memcpy(browser->directory, resolved, strlen(resolved) + 1U);
+    s_browser_scan(browser);
+}
+
+/* Points the app at a job file inside the browser's directory and packs it. */
+static void
+s_choose_job(s_app_t *app, const char *name)
+{
+    char chosen[PATH_MAX];
+
+    if (!s_join(chosen, sizeof chosen, app->browser.directory, name)
+        || strlen(chosen) >= sizeof app->job_path) {
+        (void) snprintf(app->status, sizeof app->status,
+            "path too long: %s", name);
+        return;
+    }
+    memcpy(app->job_path, chosen, strlen(chosen) + 1U);
+    s_load(app);
+    if (app->job)
+        s_pack(app);
+}
+
+/* Writes the current layout as SVG, and reports what happened. */
+static void
+s_save_svg(s_app_t *app)
+{
+    FILE *out;
+    bp_svg_result_t result;
+
+    if (!app->job || app->placement_count == 0U) {
+        (void) snprintf(app->status, sizeof app->status,
+            "nothing to save: pack something first");
+        return;
+    }
+    out = fopen(app->save_path, "w");
+    if (!out) {
+        (void) snprintf(app->status, sizeof app->status, "cannot write %s",
+            app->save_path);
+        return;
+    }
+    result = bp_svg_write((bp_svg_write_args_t) {
+        .out = out,
+        .sheet_width_cells = app->job->sheet_width_cells,
+        .sheet_height_cells = app->job->sheet_height_cells,
+        .cell_size_mm = app->job->cell_size_mm,
+        .parts = app->job->parts,
+        .part_count = app->job->part_count,
+        .placements = app->job->placements,
+        .placement_count = app->placement_count,
+        .labels = app->job->labels,
+        .draw_labels = 1
+    });
+    if (fclose(out) != 0 || result.status != BP_SVG_OK) {
+        (void) snprintf(app->status, sizeof app->status, "SVG write failed: %s",
+            app->save_path);
+        return;
+    }
+    app->saved_since_pack = 1;
+    (void) snprintf(app->status, sizeof app->status, "wrote %s",
+        app->save_path);
+}
+
+/*
+ * Asks to leave. A packing that took twenty seconds of searching and has not
+ * been written anywhere is worth one question; anything else closes at once.
+ */
+static void
+s_request_quit(s_app_t *app)
+{
+    if (app->placement_count > 0U && !app->saved_since_pack)
+        app->pending_popup = S_POPUP_QUIT;
+    else
+        app->quit = 1;
+}
+
+/*
+ * Draws the modal dialogs and reports whether one is up, so the caller can
+ * hold the keyboard shortcuts back. Ctrl+Q firing while the quit dialog asks
+ * whether to quit would be its own answer.
+ */
+static int
+s_draw_popups(s_app_t *app)
+{
+    ImGuiIO *io = igGetIO();
+    ImVec2 centre = s_vec(io->DisplaySize.x * 0.5f, io->DisplaySize.y * 0.5f);
+    int modal_open = 0;
+
+    if (app->pending_popup == S_POPUP_OPEN) {
+        s_browser_scan(&app->browser);
+        igOpenPopup_Str("Open job", 0);
+    } else if (app->pending_popup == S_POPUP_SAVE) {
+        igOpenPopup_Str("Save SVG", 0);
+    } else if (app->pending_popup == S_POPUP_QUIT) {
+        igOpenPopup_Str("Quit", 0);
+    } else if (app->pending_popup == S_POPUP_ABOUT) {
+        igOpenPopup_Str("Controls", 0);
+    }
+    app->pending_popup = S_POPUP_NONE;
+
+    igSetNextWindowPos(centre, ImGuiCond_Appearing, s_vec(0.5f, 0.5f));
+    if (igBeginPopupModal("Open job", NULL, 0)) {
+        int index;
+
+        modal_open = 1;
+
+        igText("%s", app->browser.directory);
+        if (igBeginListBox("##entries", s_vec(520.0f, 320.0f))) {
+            for (index = 0; index < app->browser.count; ++index) {
+                const s_entry_t *entry = &app->browser.entries[index];
+                char label[S_NAME_MAX + 8U];
+
+                if (entry->is_directory)
+                    (void) snprintf(label, sizeof label, "[%s]", entry->name);
+                else
+                    (void) snprintf(label, sizeof label, " %s", entry->name);
+
+                if (igSelectable_Bool(label,
+                    app->browser.selected == index, 0, s_vec(0.0f, 0.0f)))
+                    app->browser.selected = index;
+                if (igIsItemHovered(0)
+                    && igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left)) {
+                    if (entry->is_directory) {
+                        s_browser_enter(&app->browser, entry->name);
+                        break;
+                    }
+                    s_choose_job(app, entry->name);
+                    igCloseCurrentPopup();
+                    break;
+                }
+            }
+            igEndListBox();
+        }
+        igText("double click to enter a folder or open a job");
+        if (igButton("Open", s_vec(90.0f, 0.0f))
+            && app->browser.selected >= 0
+            && app->browser.selected < app->browser.count) {
+            const s_entry_t *entry =
+                &app->browser.entries[app->browser.selected];
+
+            if (entry->is_directory) {
+                s_browser_enter(&app->browser, entry->name);
+            } else {
+                s_choose_job(app, entry->name);
+                igCloseCurrentPopup();
+            }
+        }
+        igSameLine(0.0f, 8.0f);
+        if (igButton("Cancel", s_vec(90.0f, 0.0f))
+            || igIsKeyPressed_Bool(ImGuiKey_Escape, false))
+            igCloseCurrentPopup();
+        igEndPopup();
+    }
+
+    igSetNextWindowPos(centre, ImGuiCond_Appearing, s_vec(0.5f, 0.5f));
+    if (igBeginPopupModal("Save SVG", NULL, 0)) {
+        modal_open = 1;
+        igText("write the current layout to");
+        (void) igInputText("##save", app->save_path, sizeof app->save_path, 0,
+            NULL, NULL);
+        if (igButton("Save", s_vec(90.0f, 0.0f))) {
+            s_save_svg(app);
+            igCloseCurrentPopup();
+        }
+        igSameLine(0.0f, 8.0f);
+        if (igButton("Cancel", s_vec(90.0f, 0.0f))
+            || igIsKeyPressed_Bool(ImGuiKey_Escape, false))
+            igCloseCurrentPopup();
+        igEndPopup();
+    }
+
+    igSetNextWindowPos(centre, ImGuiCond_Appearing, s_vec(0.5f, 0.5f));
+    if (igBeginPopupModal("Quit", NULL, 0)) {
+        modal_open = 1;
+        igText("This packing has not been saved.");
+        igSpacing();
+        if (igButton("Save and quit", s_vec(130.0f, 0.0f))) {
+            s_save_svg(app);
+            app->quit = 1;
+            igCloseCurrentPopup();
+        }
+        igSameLine(0.0f, 8.0f);
+        if (igButton("Quit anyway", s_vec(110.0f, 0.0f))) {
+            app->quit = 1;
+            igCloseCurrentPopup();
+        }
+        igSameLine(0.0f, 8.0f);
+        if (igButton("Cancel", s_vec(90.0f, 0.0f))
+            || igIsKeyPressed_Bool(ImGuiKey_Escape, false))
+            igCloseCurrentPopup();
+        igEndPopup();
+    }
+
+    igSetNextWindowPos(centre, ImGuiCond_Appearing, s_vec(0.5f, 0.5f));
+    if (igBeginPopupModal("Controls", NULL, 0)) {
+        modal_open = 1;
+        igText("drag              pan the sheet");
+        igText("mouse wheel       zoom about the cursor");
+        igText("step slider       replay the placement order");
+        igSpacing();
+        igText("Ctrl+O  open      Ctrl+R  reload");
+        igText("F5      pack      Ctrl+S  save SVG");
+        igText("Ctrl+Q  quit");
+        igSpacing();
+        if (igButton("Close", s_vec(90.0f, 0.0f))
+            || igIsKeyPressed_Bool(ImGuiKey_Escape, false))
+            igCloseCurrentPopup();
+        igEndPopup();
+    }
+    return modal_open;
+}
+
+/* Draws the menu bar and returns its height, so the panels start below it. */
+static float
+s_draw_menu(s_app_t *app)
+{
+    float height = 0.0f;
+
+    if (igBeginMainMenuBar()) {
+        height = igGetWindowHeight();
+        if (igBeginMenu("File", true)) {
+            if (igMenuItem_Bool("Open...", "Ctrl+O", false, true))
+                app->pending_popup = S_POPUP_OPEN;
+            if (igMenuItem_Bool("Reload", "Ctrl+R", false, true)) {
+                s_load(app);
+                if (app->job)
+                    s_pack(app);
+            }
+            if (igMenuItem_Bool("Pack", "F5", false, app->job != NULL))
+                s_pack(app);
+            igSeparator();
+            if (igMenuItem_Bool("Save SVG...", "Ctrl+S", false,
+                app->placement_count > 0U))
+                app->pending_popup = S_POPUP_SAVE;
+            igSeparator();
+            if (igMenuItem_Bool("Quit", "Ctrl+Q", false, true))
+                s_request_quit(app);
+            igEndMenu();
+        }
+        if (igBeginMenu("View", true)) {
+            if (igMenuItem_Bool("Fit sheet", NULL, false, app->job != NULL))
+                app->fit_pending = 1;
+            (void) igMenuItem_BoolPtr("Part numbers", NULL, &app->show_labels,
+                true);
+            igEndMenu();
+        }
+        if (igBeginMenu("Help", true)) {
+            if (igMenuItem_Bool("Controls", NULL, false, true))
+                app->pending_popup = S_POPUP_ABOUT;
+            igEndMenu();
+        }
+        igEndMainMenuBar();
+    }
+    return height;
+}
+
+/* Applies the keyboard shortcuts the menu advertises. */
+static void
+s_handle_shortcuts(s_app_t *app)
+{
+    ImGuiIO *io = igGetIO();
+
+    /* Not while the path field has focus, or typing would trigger menus. */
+    if (io->WantTextInput)
+        return;
+
+    if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_Q, false))
+        s_request_quit(app);
+    if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_O, false))
+        app->pending_popup = S_POPUP_OPEN;
+    if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_R, false)) {
+        s_load(app);
+        if (app->job)
+            s_pack(app);
+    }
+    if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_S, false)
+        && app->placement_count > 0U)
+        app->pending_popup = S_POPUP_SAVE;
+    if (igIsKeyPressed_Bool(ImGuiKey_F5, false) && app->job)
+        s_pack(app);
 }
 
 /* Draws the sheet and the placements, and handles panning and zooming. */
@@ -496,6 +919,11 @@ main(int argc, char **argv)
     app.max_ruin = 8;
     app.zoom = 0.5f;
     app.show_labels = true;
+    (void) snprintf(app.save_path, sizeof app.save_path, "%s",
+        "build/nest.svg");
+    if (!realpath(".", app.browser.directory))
+        (void) snprintf(app.browser.directory, sizeof app.browser.directory,
+            "%s", ".");
     (void) snprintf(app.job_path, sizeof app.job_path, "%s", "jobs/demo.job");
     (void) snprintf(app.status, sizeof app.status, "press Load to begin");
 
@@ -553,29 +981,50 @@ main(int argc, char **argv)
     if (app.job)
         s_pack(&app);
 
-    while (!glfwWindowShouldClose(window)) {
+    while (!app.quit) {
         int width = 0;
         int height = 0;
+        int modal_open = 0;
+        float menu_height;
 
         glfwPollEvents();
+        if (glfwWindowShouldClose(window)) {
+            /* The window button goes through the same question as Quit. */
+            glfwSetWindowShouldClose(window, GLFW_FALSE);
+            s_request_quit(&app);
+        }
+
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         igNewFrame();
 
+        menu_height = s_draw_menu(&app);
+
         glfwGetFramebufferSize(window, &width, &height);
-        igSetNextWindowPos(s_vec(0.0f, 0.0f), ImGuiCond_Always,
+        igSetNextWindowPos(s_vec(0.0f, menu_height), ImGuiCond_Always,
             s_vec(0.0f, 0.0f));
-        igSetNextWindowSize(s_vec(360.0f, (float) height), ImGuiCond_Always);
+        igSetNextWindowSize(s_vec(360.0f, (float) height - menu_height),
+            ImGuiCond_Always);
         if (igBegin("controls", NULL,
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
-                | ImGuiWindowFlags_NoCollapse))
+                | ImGuiWindowFlags_NoCollapse)) {
             s_draw_controls(&app);
+            /*
+             * Opening and drawing a popup have to happen in the same ID
+             * scope, and the menu bar is not one: both calls live here, and
+             * the menu only raises a flag.
+             */
+            modal_open = s_draw_popups(&app);
+        }
         igEnd();
 
-        igSetNextWindowPos(s_vec(360.0f, 0.0f), ImGuiCond_Always,
+        if (!modal_open)
+            s_handle_shortcuts(&app);
+
+        igSetNextWindowPos(s_vec(360.0f, menu_height), ImGuiCond_Always,
             s_vec(0.0f, 0.0f));
-        igSetNextWindowSize(s_vec((float) width - 360.0f, (float) height),
-            ImGuiCond_Always);
+        igSetNextWindowSize(s_vec((float) width - 360.0f,
+            (float) height - menu_height), ImGuiCond_Always);
         if (igBegin("sheet", NULL,
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
                 | ImGuiWindowFlags_NoCollapse
