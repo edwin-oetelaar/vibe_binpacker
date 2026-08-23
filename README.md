@@ -1,105 +1,112 @@
-# vibe_binpacker
+# vibe_binpacker — 2D nesting for sheet material
 
-Raster-based 2D nesting for sheet material. Given a set of simple polygons and
-a rectangular plate, it decides where to cut each part so that as little
-material as possible is wasted.
+*[Deze pagina in het Nederlands](README.nl.md)*
 
-The core is deterministic C11 with no allocation in the hot path. Python does
-tooling (DXF/SVG import, reporting, plots) and a separate binary does the GUI.
-The solver itself never needs either.
+Given a set of shapes and a rectangular plate, this decides where to cut each
+part so that as little material as possible is wasted. Arbitrary simple
+polygons, holes, quarter turns, and a guaranteed gap between parts. The solver
+is deterministic C11 with no allocation in the hot path; Python does the
+tooling and a separate program does the viewer.
 
-Status: **phases P0 to P4, P6 and P7 done** - a working nester for arbitrary
-simple polygons, with holes, rotation, a guaranteed gap between parts, a CLI,
-SVG output, two search layers on top of the construction heuristic, and a
-viewer.
-[PLAN.md](PLAN.md) has the design, the algorithm and the phased roadmap;
-[RESEARCH.md](RESEARCH.md) has the literature review that shaped them.
+![the viewer](docs/gui_screenshot.png)
 
-## Approach
+It is free to use and to learn from. It is also a worked example of how I
+approach optimisation problems, which is the other reason it is here — see
+[when a good algorithm is not the answer](#when-a-good-algorithm-is-not-the-answer).
+
+**Contents** — [Quick start](#quick-start) · [How it works](#how-it-works) ·
+[Job format](#the-job-format) · [Viewer](#the-viewer) · [Build](#build) ·
+[What the measurements changed](#what-the-measurements-changed) ·
+[When an algorithm is not the answer](#when-a-good-algorithm-is-not-the-answer) ·
+[Who this matters for](#who-this-tends-to-matter-for) ·
+[Work with me](#work-with-me)
+
+---
+
+## Quick start
+
+The only prerequisite is [Pixi](https://pixi.sh); the compiler, Python and the
+GUI libraries all come from the environment it creates. Linux, for now.
+
+```sh
+pixi run demo
+```
+
+That packs the example jobs onto a 1200 × 1200 mm plate with 1 mm between
+parts and writes an SVG of each into `build/`:
+
+- [jobs/demo.job](jobs/demo.job) — 36 rectangles.
+- [jobs/shapes.job](jobs/shapes.job) — L shapes, triangles, a square frame and
+  a five-sided part, at quarter turns.
+- [jobs/nested_hole.job](jobs/nested_hole.job) — a frame and a square that can
+  only go inside the frame's hole.
+- [jobs/dense.job](jobs/dense.job) — more parts than fit, packed with the
+  search rather than a single pass.
+
+Every result is then re-checked by
+[tools/check_layout.py](tools/check_layout.py), which reads the SVG back and
+verifies **independently of the solver** that nothing overlaps, nothing leaves
+the sheet, and the clearance holds. That check is not decoration: it is what
+caught the clearance being measured between cell centres instead of cell
+squares, a bug no unit test of mine would have found because I had written
+them against the same wrong idea.
+
+To search rather than make a single pass, give it a budget:
+
+```sh
+./build/bp_pack --time 10 --svg out.svg jobs/dense.job
+```
+
+On `jobs/demo.job`, five seconds takes the used height from 1134 mm down to
+1035 mm — 99 mm more of the plate left as one clean, re-usable strip.
+
+## How it works
 
 The plate is a grid of bits, cell size configurable and 1 mm by default. At
-1 mm a 1200 x 1200 sheet is 19 `uint64_t` words per row and 182 KB in total,
+1 mm a 1200 × 1200 sheet is 19 `uint64_t` words per row and 182 KB in total,
 so the collision oracle lives in L2 cache. Parts are conservatively rasterised
 into bit masks stored as row spans, one mask per allowed rotation. Concave
 shapes and polygons with holes need no special code in that representation,
 and a part nesting *inside another part's hole* falls straight out of it. The
 price is a 1 mm quantisation, which is below the laser kerf.
 
-Clearance works the way the literature does it: each part carries two masks,
-the true geometry and a copy grown by the requested gap. The search tests the
-grown one and the sheet records the true one, which leaves exactly the gap you
-asked for rather than twice it. The growth is measured between cell *squares*
-rather than cell centres, because two cells a diagonal step apart have centres
-sqrt(2) apart but squares that touch at a corner.
+Clearance follows the literature: each part carries two masks, the true
+geometry and a copy grown by the requested gap. The search tests the grown
+one, the sheet records the true one, and that leaves exactly the gap you asked
+for rather than twice it. The growth is measured between cell *squares* rather
+than cell centres, because two cells a diagonal step apart have centres √2
+apart but squares that touch at a corner.
 
 Asking where a part fits has two very different answers. For the *first* free
 spot, a scan that skips the stretch a blocker rules out wins, because it
-usually kills a candidate on its first word. For **every** free spot at a
-height, the answer is computed rather than searched: intersecting one run mask
-per span of the part gives the whole row of legal positions in a handful of
-64-bit operations, eleven to thirty times faster than scanning for the same
-set. That second answer is the one a continuous method cannot give at all, and
-it is what a scoring layer needs. `pixi run benchmark` reports both.
+usually kills a candidate on its first 64-bit word. For **every** free spot at
+a height, the answer is computed rather than searched: intersecting one run
+mask per span gives the whole row of legal positions in a handful of word
+operations, eleven to thirty times faster than scanning for the same set. That
+second answer is one a continuous method cannot give at all, and it is what a
+scoring layer needs.
 
-The construction heuristic is **bottom-left-fill**: each part goes to the
-lowest, then leftmost free spot. It runs from a scanning search rather than
-from the erosion, because for merely finding the *first* free spot a scan that
-usually dies on its first word beats computing a whole row of answers.
+On top of the bottom-left-fill construction sit two search layers:
 
-On top of it sits **ruin and recreate**: empty one region of the sheet, put
-those parts back together with anything unplaced, keep the result if it is
-better. Three details decide whether that works at all, and each was settled
-by measurement rather than by reading - the ruin has to clear a contiguous
-region rather than scattered parts, the recreate has to pass over a small
-random fraction of candidate positions, and the randomness must stay out of
-the insertion order. [PLAN.md](PLAN.md) section 3.8 has the numbers, including
-for the choices that turned out worse.
+- **Ruin and recreate** — empty one region of the sheet, put those parts back
+  together with anything unplaced, keep the result if it is better.
+- **Overlap minimisation** — squeeze the layout into a shorter band, which
+  forces parts to overlap, then walk the overlap back to zero with a guided
+  local search.
 
-Beside it runs the family the literature actually favours: **overlap
-minimisation**. The layout is squeezed into a shorter band, which forces parts
-to overlap, and a guided local search walks the overlap back to zero. Three
-things about it are easy to get wrong in ways that still compile and run, and
-[PLAN.md](PLAN.md) section 3.9 records all three with the measurements that
-exposed them - the sharpest being that a field built from grown footprints
-reports a perfectly legal layout as thousands of cells of conflict.
+They win on different instances. Reshuffling wins where parts can be reordered
+into a better stack; squeezing wins where the order is already right and the
+layout merely needs to settle. Neither dominates, which is itself a result
+worth knowing.
 
-The two search layers win on different instances. Reshuffling wins where parts
-can be reordered into a better stack, squeezing wins where the order is
-already right and the layout merely needs to settle.
+[PLAN.md](PLAN.md) has the full design and the phased roadmap.
+[RESEARCH.md](RESEARCH.md) has the literature review that shaped it, including
+why this takes the raster route where the mainstream uses no-fit polygons.
 
-## Try it
+## The job format
 
-```sh
-pixi run demo
-```
-
-That packs the example jobs onto a 1200 x 1200 mm plate with 1 mm between parts and
-writes an SVG of each into `build/`:
-
-- [jobs/demo.job](jobs/demo.job) - 36 rectangles.
-- [jobs/shapes.job](jobs/shapes.job) - L shapes, triangles, a square frame and
-  a five-sided part offered at every 45 degrees.
-- [jobs/nested_hole.job](jobs/nested_hole.job) - a frame and a square that can
-  only go inside the frame's hole.
-- [jobs/dense.job](jobs/dense.job) - more parts than fit, packed with the
-  search rather than a single pass.
-
-Each result is then re-checked with
-[tools/check_layout.py](tools/check_layout.py), which reads the SVG back and
-verifies independently that nothing overlaps, nothing leaves the sheet and the
-clearance holds. That check is not decoration: it is what caught the clearance
-being measured between cell centres instead of cell squares.
-
-```sh
-pixi run benchmark
-```
-
-sweeps cell size and placement mode and prints CSV, then times enumerating
-every feasible position for a part against doing it by scanning.
-
-The job format is line based on purpose, so the solver needs no parser
-dependency. DXF and SVG import belong in Python tooling that writes these
-files.
+Line based on purpose, so the solver needs no parser dependency. DXF and SVG
+import belong in tooling that writes these files.
 
     sheet 1200 1200        # plate size in mm
     cell 1.0               # grid resolution in mm
@@ -117,45 +124,66 @@ geometry path. Ring winding does not matter: filling uses the even-odd rule,
 because real CAD input arrives wound arbitrarily and guessing at it would be
 worse than ignoring it.
 
-## Layout
+## The viewer
 
-    include/        every public header, one per module
-    src/            the solver, one implementation file per header
-    apps/           bp_pack (the CLI) and bp_bench (the benchmark)
-    tests/          one test program per module
-    gui/            the viewer; the only third-party dependency
-    jobs/           example job files
-    tools/          Python tooling and the GUI dependency fetcher
-    build/          everything the build produces
+A packing is a spatial thing, and a column of numbers hides everything that
+matters about it: which corner went wrong, which part is stranded, whether the
+waste is one usable strip or scattered slivers.
 
-The solver is one module per pair of files:
+```sh
+pixi run fetch-gui-deps
+pixi run gui
+./build/bp_gui jobs/shapes.job
+```
 
-    bp_contract     fail-fast contract macro
-    bp_bitmap       bitboard rows, shifts, span queries, counts
-    bp_mask         part footprint as row spans, blit, overlap
-    bp_polygon      rings, validation, simplicity, bounds, rotation
-    bp_raster       conservative fill, growth for clearance
-    bp_place        placement search in three modes, and every feasible
-                    position at a height
-    bp_nester       sequence decoder, bottom-left-fill
-    bp_score        contact measure and ranked position choice
-    bp_penetration  weighted cell counts with per-row running totals
-    bp_separate     guided local search that resolves overlap
-    bp_search       ruin and recreate, then squeezing, on a time budget
-    bp_job          job file loading and mask construction
-    bp_svg          solution to SVG
+Drag to pan, wheel to zoom, and drag the step slider to replay the placement
+order — the fastest way to watch a heuristic make a bad decision. The controls
+re-pack without restarting.
+
+| | |
+| --- | --- |
+| `Ctrl+O` | open a job, with a small browser that lists `.job` files |
+| `Ctrl+R` | reload, picking up an edited file or a new cell size |
+| `F5` | pack again |
+| `Ctrl+S` | write the layout as SVG |
+| `Ctrl+Q` | quit |
+
+Quitting with an unsaved packing asks first, whether you use the menu, the
+shortcut or the window button.
+
+The viewer is the only part of this project with a third-party dependency, and
+it is fenced off: `pixi run test`, `demo` and `benchmark` never touch it, and
+[tools/fetch_gui_deps.sh](tools/fetch_gui_deps.sh) pins the revision rather
+than committing a copy of Dear ImGui. The window itself is plain C — cimgui is
+the generated C API for Dear ImGui, and the C++ behind it is compiled
+separately. Parts go straight into the ImGui draw list as merged rectangles,
+so there are no shaders and no textures.
+
+`./build/bp_gui <job> --shot frame.ppm --frames 12` renders a few frames,
+writes the framebuffer and exits, which is how a window gets checked from a
+script. A GUI that builds is not a GUI that draws.
+
+### If the window appears in the taskbar but stays blank
+
+GLFW prefers Wayland whenever `WAYLAND_DISPLAY` is set; under WSLg its EGL
+cannot find a driver, falls back to zink, finds no device, and presents
+nothing. The viewer therefore asks for **X11** by default, which works under
+WSLg and on native Wayland desktops through XWayland alike. `--platform
+wayland` and `--platform auto` override it.
+
+If nothing appears at all, `./build/bp_gui --diagnose` prints the backend, the
+GL driver, where the window thinks it is and how many frames it actually
+produced, then exits. If that all looks healthy and the screen is still empty,
+the display path itself is stuck — under WSL, `wsl --shutdown` from PowerShell
+restarts it.
 
 ## Build
-
-Everything comes from [Pixi](https://pixi.sh), so the only prerequisite is
-Pixi itself; the compiler, Python and the GUI libraries all come from the
-environment it creates. Linux only so far.
 
 ```sh
 pixi run test
 ```
 
-That builds the solver and runs every test. The first run also creates the
+builds the solver and runs every test. The first run also creates the
 environment, which takes a minute.
 
 | task | what it does |
@@ -170,109 +198,152 @@ environment, which takes a minute.
 | `pixi run clean` | `rm -rf build` |
 
 Everything the build produces goes under `build/` and nothing else does, so
-cleaning is a plain directory removal and the source tree never fills with
-objects. Programs land in `build/bp_pack`, `build/bp_bench` and
-`build/bp_gui`.
+cleaning is a plain directory removal. Plain `make` works too if you would
+rather bring your own toolchain: the Makefile assumes nothing but a C11
+compiler, and `make gui` additionally needs GLFW and the OpenGL headers.
 
-Plain `make` works too if you would rather bring your own toolchain: the
-Makefile assumes nothing but a C11 compiler, and `make gui` additionally needs
-GLFW and the OpenGL headers.
+Compiler flags are fixed at `-std=c11 -Wall -Wextra -Werror -pedantic`, with
+sanitizer runs required for any change to indexing or bit shifting. Tests are
+found by wildcard, so adding `tests/test_something.c` is enough to have it
+built and run.
 
-Compiler flags are fixed at `-std=c11 -Wall -Wextra -Werror -pedantic`, and
-tests are found by wildcard, so adding `tests/test_something.c` is enough to
-have it built and run.
+    include/   every public header, one per module
+    src/       the solver, one implementation file per header
+    apps/      bp_pack (the CLI) and bp_bench (the benchmark)
+    tests/     one test program per module
+    gui/       the viewer
+    jobs/      example job files
+    tools/     Python tooling
+    build/     everything the build produces
 
-## The viewer
+## What the measurements changed
 
-A packing is a spatial thing, and a column of numbers hides everything that
-matters about it: which corner went wrong, which part is stranded, whether the
-waste is one usable strip or scattered slivers.
+This is the part I would actually point at, because it is the difference
+between software that looks right and software that is right. Every one of
+these overturned the obvious approach, and every one surfaced only because
+something was measured. All of them are written up in [PLAN.md](PLAN.md) with
+the numbers.
 
-```sh
-pixi run fetch-gui-deps
-```
+- **The clever jump was the wrong trade.** Skipping ahead as far as all the
+  evidence allows cut candidate positions by 0.4 % and cost seventy times more
+  work per position. Stopping at the first blocker is 69 times faster.
+- **The "real engine" lost.** The plan called morphological erosion the core of
+  the method. Measured, it is *slower* than a plain scan for finding the first
+  free spot — and eleven to thirty times faster for enumerating every free
+  spot, which is a different question and the one that actually matters
+  downstream.
+- **Clearance measured between cell centres lets parts touch at the corners.**
+  Two cells a diagonal step apart are √2 apart by centre and zero apart by
+  material. Caught by the independent checker, not by a unit test.
+- **A greedy repair loop is a fixed point.** Ruin and recreate produced exactly
+  zero improvements over five thousand rounds until the ruin cleared a
+  contiguous region and the repair was allowed to skip a few candidates at
+  random.
+- **A penalty that steers only the choice is not guided local search.** With
+  penalties deciding which part moves but not what a position costs, no squeeze
+  on a tight sheet ever resolved. Moving the weight into the cost made every
+  one resolve, in 15 to 114 iterations instead of stalling at a thousand.
+- **Contact scoring, the classic heuristic, did not earn its default.** Any
+  positive weight placed five fewer parts than plain bottom-left on an
+  over-subscribed sheet. It is implemented, tested, exposed as a flag, and
+  defaults to zero.
 
-```sh
-pixi run gui
-```
+Negative results are kept on purpose. A repository that only records what
+worked teaches you very little about how to get there.
 
-then `./build/bp_gui jobs/shapes.job`. Drag to pan, wheel to zoom, and drag
-the step slider to replay the placement order, which is the fastest way to
-watch a heuristic make a bad decision. The controls re-pack without
-restarting.
+## When a good algorithm is not the answer
+
+A nesting algorithm optimises one thing: the arrangement of parts on one
+sheet. That is rarely where most of your material cost is decided.
+
+What decides it is which orders get cut together, which sheet sizes you buy,
+whether remnants come back into stock with a usable geometry or get thrown in
+the skip, grain and finish direction, cutting sequence and thermal effects,
+common-line cutting, clamping zones and tip-up risk on small parts, material
+batches and traceability, and — always — what your operators actually do when
+the plan is inconvenient. A solver that ignores those can be provably optimal
+and still lose money.
+
+And then there is getting it to land. Value appears when it runs inside the
+flow you already have: your ERP or MES, your CAM post, your DXF conventions,
+your part library, your naming, without anyone retyping anything. That part is
+not glamorous and it is most of the work.
+
+I am wary of the shortest route to an answer here. A language model will
+produce a plausible plan in a minute, and it will sound right. What it will
+not do is measure whether the plan is true for *your* material, *your* machine
+and *your* order book. Six of the findings listed above contradict the obvious
+approach; not one of them would have survived a confident summary, and each
+one was worth real material. I would rather bring you a number than an opinion.
+
+So: use this repository freely. If what you need is a measurable reduction in
+waste inside a real production process, that is a different job, and it is the
+one I do.
+
+## Who this tends to matter for
+
+Anywhere parts are cut from stock and the offcut is money:
 
 | | |
 | --- | --- |
-| `Ctrl+O` | open a job, with a small browser that lists `.job` files |
-| `Ctrl+R` | reload the current job, picking up an edited file or cell size |
-| `F5` | pack again |
-| `Ctrl+S` | write the layout as SVG |
-| `Ctrl+Q` | quit |
+| **Sheet metal** | laser, plasma and waterjet job shops; machine building and their suppliers |
+| **Steel construction and shipbuilding** | plate nesting on large formats, where a percent is a lot of tonnes |
+| **Furniture and interior fit-out** | CNC nesting in MDF, plywood and chipboard, with grain direction |
+| **Glass, plastics, composite panel** | acrylic, polycarbonate, Dibond, honeycomb |
+| **Textile, leather, upholstery** | clothing, furniture covers, automotive interiors, with pattern and nap constraints |
+| **Packaging and die-cutting** | cardboard and corrugated layouts, cutting dies |
+| **Composites** | prepreg and dry fabric kit cutting, where material cost dominates |
+| **Insulation, rubber, gaskets** | high-volume cutting from rolls and sheets |
+| **Stone, ceramics, worktops** | slabs with natural defects and vein matching — genuinely hard nesting |
+| **Signage and print finishing** | foam board, vinyl, Dibond, mixed short runs |
+| **Electronics** | PCB panelisation and depanelisation |
 
-Quitting with a packing you have not saved asks first, whether you use the
-menu, the shortcut or the window button; quitting with nothing to lose just
-quits.
+If the bottleneck turns out not to be the sheet at all, the same toolbox
+covers production planning, order batching and grouping, capacity and shift
+planning, routing and scheduling. Operations research is the field; nesting is
+one problem in it.
 
-### If the window appears in the taskbar but stays blank
+## Work with me
 
-That is the Wayland path failing, and WSLg is where it shows up. GLFW prefers
-Wayland whenever `WAYLAND_DISPLAY` is set; under WSLg its EGL cannot find a
-driver, falls back to zink, finds no device, and presents nothing. The
-give-away is a console full of
+I am **Edwin van den Oetelaar**, an independent software developer in the
+Netherlands. I build optimisation software for companies that cut, plan and
+schedule — from the algorithm through to the integration with the systems you
+already run.
 
-    libEGL warning: failed to get driver name for fd -1
-    MESA: error: ZINK: failed to choose pdev
+I studied industrial engineering and operations research, which is why these
+puzzles are still fun after all these years, and why I would rather measure
+than assume. This repository is what that looks like in practice: benchmarks
+before claims, negative results kept, and a checker that does not trust the
+solver.
 
-and a window titled `[WARN: COPY MODE]`. Rendering itself is fine either way -
-a `--shot` capture comes out correct - which makes it awkward to diagnose from
-inside the program.
+<!-- CONTACT DETAILS: fill this in before publishing -->
 
-The viewer therefore asks for **X11** by default, which works under WSLg and
-on native Wayland desktops through XWayland alike. `--platform wayland` and
-`--platform auto` override it, and the status line shows which one is in use.
+> ### Get in touch
+>
+> **_This box still needs to be filled in._**
+>
+> - **Edwin van den Oetelaar** — independent software developer, Netherlands
+> - Email: _to be added_
+> - LinkedIn: _to be added_
+> - Website: _to be added_
+> - Phone: _to be added_
+>
+> Happy to talk through a concrete case: what you cut, on what, in what
+> volumes, and where the waste is now.
 
-The viewer is the only part of this project with a third-party dependency, and
-it is fenced off: `pixi run test`, `pixi run demo` and `pixi run benchmark`
-never touch it, and [tools/fetch_gui_deps.sh](tools/fetch_gui_deps.sh) pins the
-revision rather than committing a copy of Dear ImGui. The window itself is
-plain C - cimgui is the generated C API for Dear ImGui, and the C++ behind it
-is compiled separately and never appears in our sources. Parts are drawn
-straight into the ImGui draw list, so there are no shaders and no textures:
-`bp_mask_run_height` turns a footprint into a handful of rectangles and those
-go into the list.
+## Licence
 
-`./build/bp_gui <job> --shot frame.ppm --frames 12` renders a few frames, writes the
-framebuffer and exits, which is how a window gets checked from a script. A GUI
-that builds is not a GUI that draws.
+<!-- LICENCE: choose one and add a LICENSE file before publishing -->
 
-To search rather than make a single pass, give `bp_pack` a budget:
-
-```sh
-./build/bp_pack --time 10 --svg out.svg jobs/dense.job
-```
-
-`--search <rounds>` bounds it by rounds instead, and `--compact <fraction>`
-sets how much of the budget goes to squeezing rather than reshuffling. On
-`jobs/demo.job` five seconds takes the used height from 1134 mm down to
-1035 mm, which is 99 mm more of the plate left as one clean strip; on
-`jobs/shapes.job` the squeezing phase takes 504 mm down to 483 mm.
-
-Compiler flags are fixed at `-std=c11 -Wall -Wextra -Werror -pedantic`, with
-AddressSanitizer and UndefinedBehaviorSanitizer runs required for any change
-to indexing or bit shifting.
+_Not yet chosen._ Until a `LICENSE` file is added, default copyright applies
+and no permission to reuse is granted. If you want to use this, get in touch
+and it will be sorted out quickly.
 
 ## Conventions
 
-C style follows Pieter Hintjens' Scalable C, as used in the sibling project
-`~/tmp_codex`: one header and one implementation file per module, `bp_` for
-public symbols and `s_` for file-local statics, caller-owned buffers, no
-global mutable state, units in names (`width_cells`, `kerf_mm`). Invalid
-caller input is a programming defect and fails fast; expected runtime failures
-return explicit tagged results.
-
-## Related work
-
-Nesting is a well-studied NP-hard problem. The mainstream approach uses no-fit
-polygons; this project deliberately takes the raster route for robustness on
-concave shapes and holes. References are listed at the end of
-[PLAN.md](PLAN.md).
+C style follows Pieter Hintjens' Scalable C: one header and one implementation
+file per module, `bp_` for public symbols and `s_` for file-local statics,
+caller-owned buffers, no global mutable state, units in names
+(`width_cells`, `kerf_mm`). Invalid caller input is a programming defect and
+fails fast; expected runtime failures return explicit tagged results. See
+[AGENTS.md](AGENTS.md).

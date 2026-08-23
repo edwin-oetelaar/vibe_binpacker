@@ -1,8 +1,7 @@
 # Plan: raster-based 2D nesting for laser cut sheets
 
-Status: draft for review. Nothing is implemented yet.
-Language of this document is English to match the sibling project
-`~/tmp_codex` (material-nesting baseline). Say the word and it becomes Dutch.
+Design notes and roadmap. Written as the project went along, so the sections
+that measurement overturned say so rather than being quietly rewritten.
 
 ## 1. Problem
 
@@ -366,7 +365,7 @@ worth more than 84 % with waste sprayed everywhere.
 
 Pure C11 core, no allocation in the hot path, caller-owned buffers, `bp_`
 prefix for public symbols and `s_` for file-local statics, following the
-`AGENTS.md` rules already in use in `~/tmp_codex`.
+rules in `AGENTS.md`.
 
 Headers live in `include/`, implementations in `src/`, programs in `apps/`,
 tests in `tests/`, and every build product under `build/`.
