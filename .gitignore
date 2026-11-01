@@ -8,3 +8,6 @@ third_party/
 imgui.ini
 
 .pixi/
+
+# Python byte code from the tools importing each other.
+__pycache__/

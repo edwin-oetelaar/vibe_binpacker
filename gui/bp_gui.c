@@ -26,6 +26,11 @@
 #include "cimgui_impl.h"
 
 #include "bp_contract.h"
+#include "bp_cutjob.h"
+#include "bp_cutplan.h"
+#include "bp_cutsearch.h"
+#include "bp_cutview.h"
+#include "bp_guillotine.h"
 #include "bp_job.h"
 #include "bp_mask.h"
 #include "bp_multisheet.h"
@@ -117,6 +122,40 @@ static const s_preset_t s_presets[] = {
 #define S_PRESET_JOB 0
 #define S_PRESET_CUSTOM (S_PRESET_COUNT - 1)
 
+/*
+ * Everything a panel saw plan needs, allocated with its job: sized for every
+ * part on its own plate, so any plate limit fits without reallocating.
+ */
+typedef struct {
+    bp_job_t *job;
+    bp_cut_settings_t settings;
+    bp_cut_item_t *items;
+    bp_cut_node_t *nodes;
+    uint32_t node_capacity;
+    bp_cut_plate_t *plates;
+    uint32_t plate_capacity;
+    uint8_t *placed;
+    uint32_t *scratch;
+    uint32_t *orders;
+    uint8_t *bias;
+    uint8_t *seen;
+    uint8_t *used;
+    bp_cut_t *cuts;
+    bp_cut_t *export_cuts;
+    uint32_t cut_capacity;
+    bp_cutplan_t plan;
+    bp_cutview_t view;
+    uint32_t oversized_count;
+    uint32_t start_plates;
+} s_saw_t;
+
+/* Stage colours, matching bp_cutexport's SVG: trims grey, then by stage. */
+static const ImU32 s_stage_colours[] = {
+    0xff7f7f7f, 0xff2827d6, 0xffb4771f, 0xff2ca02c, 0xffbd6794
+};
+
+#define S_STAGE_COLOURS (sizeof s_stage_colours / sizeof s_stage_colours[0])
+
 /* Everything the window shows and everything it lets you change. */
 typedef struct {
     char job_path[S_PATH_MAX];
@@ -137,6 +176,15 @@ typedef struct {
     double sheet_height_mm;
     bool cell_from_job;
     double cell_size_mm;
+
+    /*
+     * Panel saw mode packs a guillotine plan from the job's saw lines instead
+     * of nesting freely; it has its own job, plan and view.
+     */
+    bool saw_mode;
+    s_saw_t saw;
+    /* Most plates for the saw, 0 for as many as the parts need. */
+    int saw_max_plates;
 
     /* Packing controls. */
     int sort_index;
@@ -198,6 +246,14 @@ s_preset_for(double width_mm, double height_mm)
     return S_PRESET_CUSTOM;
 }
 
+/* Returns the job of the mode in use, or NULL before one is loaded. */
+static const bp_job_t *
+s_active_job(const s_app_t *app)
+{
+    BP_REQUIRE(app);
+    return app->saw_mode ? app->saw.job : app->job;
+}
+
 /*
  * Shows the job file's own values in the fields that are set to follow it, so
  * switching to custom starts from what is actually in force.
@@ -205,13 +261,15 @@ s_preset_for(double width_mm, double height_mm)
 static void
 s_sync_geometry_fields(s_app_t *app)
 {
-    BP_REQUIRE(app && app->job);
+    const bp_job_t *job = s_active_job(app);
+
+    BP_REQUIRE(job);
     if (app->size_preset == S_PRESET_JOB) {
-        app->sheet_width_mm = app->job->file_sheet_width_mm;
-        app->sheet_height_mm = app->job->file_sheet_height_mm;
+        app->sheet_width_mm = job->file_sheet_width_mm;
+        app->sheet_height_mm = job->file_sheet_height_mm;
     }
     if (app->cell_from_job)
-        app->cell_size_mm = app->job->file_cell_size_mm;
+        app->cell_size_mm = job->file_cell_size_mm;
 }
 
 /*
@@ -322,7 +380,7 @@ s_geometry_pending(const s_app_t *app)
     double cell_size_mm;
 
     BP_REQUIRE(app);
-    job = app->job;
+    job = s_active_job(app);
     if (!job)
         return 0;
     width_mm = app->size_preset == S_PRESET_JOB ? job->file_sheet_width_mm
@@ -331,8 +389,9 @@ s_geometry_pending(const s_app_t *app)
         : app->sheet_height_mm;
     cell_size_mm = app->cell_from_job ? job->file_cell_size_mm
         : app->cell_size_mm;
+    /* A saw has no raster, so the cell size changes nothing for it. */
     return width_mm != job->sheet_width_mm || height_mm != job->sheet_height_mm
-        || cell_size_mm != job->cell_size_mm;
+        || (!app->saw_mode && cell_size_mm != job->cell_size_mm);
 }
 
 /* Checks the packing controls, so a refused pack never costs the old result. */
@@ -502,6 +561,262 @@ s_pack(s_app_t *app)
         (unsigned) sheet_count, app->seconds);
 }
 
+/* Releases a saw plan and its job, leaving the state empty. */
+static void
+s_saw_free(s_saw_t *saw)
+{
+    BP_REQUIRE(saw);
+    free(saw->items);
+    free(saw->nodes);
+    free(saw->plates);
+    free(saw->placed);
+    free(saw->scratch);
+    free(saw->orders);
+    free(saw->bias);
+    free(saw->seen);
+    free(saw->used);
+    free(saw->cuts);
+    free(saw->export_cuts);
+    if (saw->job)
+        bp_job_destroy(&saw->job);
+    memset(saw, 0, sizeof *saw);
+}
+
+/*
+ * Loads a job for the panel saw: no raster, the saw from the job's lines, the
+ * plate size from the geometry controls. Everything is prepared before the
+ * old state is replaced, so a refused job leaves the previous plan shown.
+ */
+static int
+s_saw_load(s_app_t *app, const char *path)
+{
+    char chosen[S_PATH_MAX];
+    int sheet_override;
+    bp_job_load_result_t loaded;
+    bp_cutjob_result_t built;
+    s_saw_t saw;
+    uint32_t count;
+
+    BP_REQUIRE(app);
+    BP_REQUIRE(path && strlen(path) < sizeof chosen);
+    memcpy(chosen, path, strlen(path) + 1U);
+    sheet_override = app->size_preset != S_PRESET_JOB;
+    if (sheet_override && (!isfinite(app->sheet_width_mm)
+        || !isfinite(app->sheet_height_mm) || !(app->sheet_width_mm > 0.0)
+        || !(app->sheet_height_mm > 0.0))) {
+        (void) snprintf(app->status, sizeof app->status, "not applied: %s",
+            bp_sheet_status_text(BP_SHEET_BAD_SIZE));
+        return 0;
+    }
+    loaded = bp_job_load_with((bp_job_load_args_t) {
+        .path = chosen,
+        .sheet_width_mm = sheet_override ? app->sheet_width_mm : 0.0,
+        .sheet_height_mm = sheet_override ? app->sheet_height_mm : 0.0,
+        .rectangles_only = 1
+    });
+    if (loaded.status != BP_JOB_OK) {
+        if (loaded.line_number > 0U)
+            (void) snprintf(app->status, sizeof app->status, "%s:%u: %s",
+                chosen, loaded.line_number, bp_job_status_text(loaded.status));
+        else
+            (void) snprintf(app->status, sizeof app->status, "%s: %s", chosen,
+                bp_job_status_text(loaded.status));
+        return 0;
+    }
+
+    memset(&saw, 0, sizeof saw);
+    saw.job = loaded.job;
+    count = saw.job->part_count;
+    saw.node_capacity = bp_guillotine_node_capacity(count, count > 0U ? count : 1U);
+    saw.plate_capacity = count;
+    saw.cut_capacity = saw.node_capacity + 4U * count + 1U;
+    saw.items = calloc(count + 1U, sizeof *saw.items);
+    saw.nodes = calloc(saw.node_capacity + 1U, sizeof *saw.nodes);
+    saw.plates = calloc(count + 1U, sizeof *saw.plates);
+    saw.placed = calloc(count + 1U, sizeof *saw.placed);
+    saw.scratch = calloc(bp_guillotine_scratch_words(count) + 1U,
+        sizeof *saw.scratch);
+    saw.orders = calloc(bp_cutsearch_order_words(count) + 1U, sizeof *saw.orders);
+    saw.bias = calloc(3U * (size_t) count + 1U, sizeof *saw.bias);
+    saw.seen = calloc(saw.node_capacity + 1U, sizeof *saw.seen);
+    saw.used = calloc(count + 1U, sizeof *saw.used);
+    saw.cuts = calloc(saw.cut_capacity, sizeof *saw.cuts);
+    saw.export_cuts = calloc(saw.cut_capacity, sizeof *saw.export_cuts);
+    if (!saw.items || !saw.nodes || !saw.plates || !saw.placed || !saw.scratch
+        || !saw.orders || !saw.bias || !saw.seen || !saw.used || !saw.cuts
+        || !saw.export_cuts) {
+        s_saw_free(&saw);
+        (void) snprintf(app->status, sizeof app->status,
+            "out of memory for the cutting plan");
+        return 0;
+    }
+    built = bp_cutjob_build((bp_cutjob_args_t) {
+        .job = saw.job, .settings = &saw.settings, .items = saw.items,
+        .item_capacity = count });
+    if (built.status != BP_CUTJOB_OK) {
+        if (built.status == BP_CUTJOB_NOT_RECTANGLE
+            || built.status == BP_CUTJOB_DUPLICATE_LABEL)
+            (void) snprintf(app->status, sizeof app->status,
+                "not for the saw: %s (label %u)",
+                bp_cutjob_status_text(built.status),
+                (unsigned) saw.job->labels[built.part]);
+        else
+            (void) snprintf(app->status, sizeof app->status,
+                "not for the saw: %s", bp_cutjob_status_text(built.status));
+        s_saw_free(&saw);
+        return 0;
+    }
+
+    s_saw_free(&app->saw);
+    app->saw = saw;
+    memcpy(app->loaded_path, chosen, strlen(chosen) + 1U);
+    s_sync_geometry_fields(app);
+    app->fit_pending = 1;
+    (void) snprintf(app->status, sizeof app->status,
+        "loaded %u parts for the saw: %.6g x %.6g mm%s, kerf %.2f mm",
+        (unsigned) count, saw.job->sheet_width_mm, saw.job->sheet_height_mm,
+        sheet_override ? " (override)" : "", saw.settings.kerf_10um / 100.0);
+    return 1;
+}
+
+/*
+ * Packs the loaded saw job with the packing controls: the constructive plan,
+ * or a search over it when optimise is on. The plan is checked before it is
+ * shown; a packer that broke a sawing rule is a defect, not a result.
+ */
+static void
+s_saw_pack(s_app_t *app)
+{
+    s_saw_t *saw;
+    uint32_t count;
+    uint32_t max_plates;
+    bp_guillotine_args_t pack;
+    bp_guillotine_result_t result;
+    bp_cutplan_check_result_t check;
+    clock_t started;
+
+    BP_REQUIRE(app);
+    saw = &app->saw;
+    if (!saw->job || !s_pack_controls_valid(app))
+        return;
+    if (app->saw_max_plates < 0) {
+        (void) snprintf(app->status, sizeof app->status,
+            "plate limit must not be negative");
+        return;
+    }
+    count = saw->job->part_count;
+    max_plates = app->saw_max_plates > 0 && (uint32_t) app->saw_max_plates < count
+        ? (uint32_t) app->saw_max_plates : (count > 0U ? count : 1U);
+    pack = (bp_guillotine_args_t) {
+        .settings = &saw->settings, .items = saw->items, .item_count = count,
+        .max_plates = max_plates,
+        .nodes = saw->nodes, .node_capacity = saw->node_capacity,
+        .plates = saw->plates, .plate_capacity = saw->plate_capacity,
+        .placed = saw->placed,
+        .scratch = saw->scratch,
+        .scratch_capacity = bp_guillotine_scratch_words(count)
+    };
+    started = clock();
+    app->iterations_run = 0U;
+    app->improvements = 0U;
+    if (app->use_search) {
+        bp_cutsearch_result_t searched = bp_cutsearch_run((bp_cutsearch_args_t) {
+            .pack = pack,
+            .iterations = app->fixed_rounds ? (uint32_t) app->search_rounds
+                : UINT32_MAX,
+            .time_budget_seconds = app->fixed_rounds ? 0.0
+                : (double) app->time_budget_seconds,
+            .seed = UINT64_C(0x5deece66d),
+            .scratch_orders = saw->orders,
+            .scratch_order_capacity = bp_cutsearch_order_words(count),
+            .scratch_bias = saw->bias,
+            .scratch_bias_capacity = 3U * count
+        });
+
+        result = searched.best;
+        app->iterations_run = searched.iterations_run;
+        app->improvements = searched.improvements;
+        saw->start_plates = searched.start_plate_count;
+    } else {
+        result = bp_guillotine_pack(pack);
+        saw->start_plates = result.plate_count;
+    }
+    app->seconds = (double) (clock() - started) / CLOCKS_PER_SEC;
+    saw->oversized_count = result.oversized_count;
+    saw->plan = (bp_cutplan_t) {
+        .settings = saw->settings,
+        .nodes = saw->nodes, .node_count = result.node_count,
+        .plates = saw->plates, .plate_count = result.plate_count,
+        .items = saw->items, .item_count = count
+    };
+    check = bp_cutplan_check((bp_cutplan_check_args_t) {
+        .plan = &saw->plan,
+        .scratch_node_seen = saw->seen, .scratch_node_capacity = saw->node_capacity,
+        .scratch_item_used = saw->used, .scratch_item_capacity = count
+    });
+    BP_REQUIRE(check.status == BP_CUTPLAN_OK);
+    saw->view = bp_cutview_publish((bp_cutview_publish_args_t) {
+        .plan = &saw->plan, .labels = saw->job->labels, .cuts = saw->cuts,
+        .cut_capacity = saw->cut_capacity });
+    app->fit_pending = 1;
+    (void) snprintf(app->result_settings, sizeof app->result_settings,
+        "panel saw; %s", app->use_search ? "optimised" : "construction");
+    (void) snprintf(app->status, sizeof app->status,
+        "sawn %u of %u parts on %u plates, %u cuts, in %.3f CPU s",
+        (unsigned) saw->view.placed_count, (unsigned) count,
+        (unsigned) result.plate_count, (unsigned) saw->view.cut_count,
+        app->seconds);
+}
+
+/* Loads a job in the mode in use; returns whether it was loaded. */
+static int
+s_load_any(s_app_t *app, const char *path)
+{
+    BP_REQUIRE(app);
+    if (app->saw_mode)
+        return s_saw_load(app, path);
+    return s_load(app, path).status == BP_JOB_OK;
+}
+
+/* Packs in the mode in use. */
+static void
+s_pack_any(s_app_t *app)
+{
+    BP_REQUIRE(app);
+    if (app->saw_mode)
+        s_saw_pack(app);
+    else
+        s_pack(app);
+}
+
+/* Reports whether the mode in use has a result to show or save. */
+static int
+s_has_result(const s_app_t *app)
+{
+    BP_REQUIRE(app);
+    if (app->saw_mode)
+        return app->saw.view.plan && app->saw.view.placed_count > 0U;
+    return app->result.placement_count > 0U;
+}
+
+/* Reports whether the shown result has been saved. */
+static int
+s_result_saved(const s_app_t *app)
+{
+    BP_REQUIRE(app);
+    return app->saw_mode ? app->saw.view.saved : app->result.saved;
+}
+
+/* Returns how many plates the shown result uses. */
+static uint32_t
+s_plate_count(const s_app_t *app)
+{
+    BP_REQUIRE(app);
+    if (app->saw_mode)
+        return app->saw.view.plan ? app->saw.view.plan->plate_count : 0U;
+    return app->result.sheet_count;
+}
+
 /*
  * The Pack action: a pending geometry change rebuilds the job in force first.
  * Every check runs before the old job is touched, so a refused size or a bad
@@ -511,16 +826,38 @@ static void
 s_pack_or_apply(s_app_t *app)
 {
     BP_REQUIRE(app);
-    if (!app->job || !s_pack_controls_valid(app))
+    if (!s_active_job(app) || !s_pack_controls_valid(app))
         return;
     if (s_geometry_pending(app)) {
         char path[S_PATH_MAX];
 
         memcpy(path, app->loaded_path, strlen(app->loaded_path) + 1U);
-        if (s_load(app, path).status != BP_JOB_OK)
+        if (!s_load_any(app, path))
             return;
     }
-    s_pack(app);
+    s_pack_any(app);
+}
+
+/*
+ * Switches between free nesting and the panel saw by loading the job in the
+ * other mode and packing it. A job the other mode cannot take, such as one
+ * without a kerf line for the saw, keeps the current mode and its result.
+ */
+static void
+s_switch_mode(s_app_t *app, bool saw_mode)
+{
+    char path[S_PATH_MAX];
+
+    BP_REQUIRE(app);
+    if (app->saw_mode == saw_mode)
+        return;
+    memcpy(path, app->job_path, strlen(app->job_path) + 1U);
+    app->saw_mode = saw_mode;
+    if (!s_pack_controls_valid(app) || !s_load_any(app, path)) {
+        app->saw_mode = !saw_mode;
+        return;
+    }
+    s_pack_any(app);
 }
 
 /*
@@ -635,8 +972,8 @@ s_choose_job(s_app_t *app, const char *name)
         return;
     }
     memcpy(app->job_path, chosen, strlen(chosen) + 1U);
-    if (s_pack_controls_valid(app) && s_load(app, app->job_path).status == BP_JOB_OK)
-        s_pack(app);
+    if (s_pack_controls_valid(app) && s_load_any(app, app->job_path))
+        s_pack_any(app);
 }
 
 /* Exports every full plate, retaining unsaved state and the dialog on I/O failure. */
@@ -647,6 +984,42 @@ s_save_svg(s_app_t *app)
     bp_view_export_result_t result;
 
     BP_REQUIRE(app);
+    if (app->saw_mode) {
+        bp_cutview_export_result_t saw;
+
+        if (!s_has_result(app)) {
+            (void) snprintf(app->status, sizeof app->status,
+                "nothing to save: pack something first");
+            return (bp_view_export_result_t) { .status = BP_VIEW_EXPORT_EMPTY };
+        }
+        saw = bp_cutview_export((bp_cutview_export_args_t) {
+            .view = &app->saw.view, .path = app->save_path,
+            .scratch_path = path, .path_capacity = sizeof path,
+            .scratch_cuts = app->saw.export_cuts,
+            .scratch_cut_capacity = app->saw.cut_capacity
+        });
+        result = (bp_view_export_result_t) {
+            .status = saw.status == BP_CUTVIEW_EXPORT_OK ? BP_VIEW_EXPORT_OK
+                : saw.status == BP_CUTVIEW_EXPORT_EMPTY ? BP_VIEW_EXPORT_EMPTY
+                : saw.status == BP_CUTVIEW_EXPORT_PATH_TOO_LONG
+                    ? BP_VIEW_EXPORT_PATH_TOO_LONG : BP_VIEW_EXPORT_WRITE_FAILED,
+            .written_count = saw.written_count,
+            .system_error = saw.system_error
+        };
+        if (result.status != BP_VIEW_EXPORT_OK)
+            (void) snprintf(app->status, sizeof app->status,
+                "export failed after %u files: %s%s (%s)",
+                (unsigned) result.written_count,
+                result.status == BP_VIEW_EXPORT_PATH_TOO_LONG ? "path too long: " : "",
+                path[0] ? path : app->save_path,
+                result.system_error ? strerror(result.system_error)
+                    : "check the output path");
+        else
+            (void) snprintf(app->status, sizeof app->status,
+                "saved the saw list and %u plates: %s",
+                (unsigned) (result.written_count - 1U), app->save_path);
+        return result;
+    }
     if (!app->result.parts || app->result.placement_count == 0U) {
         (void) snprintf(app->status, sizeof app->status,
             "nothing to save: pack something first");
@@ -679,7 +1052,7 @@ s_request_quit(s_app_t *app)
     BP_REQUIRE(app);
     if (app->quit_after_save)
         return;
-    if (app->result.placement_count > 0U && !app->result.saved)
+    if (s_has_result(app) && !s_result_saved(app))
         app->pending_popup = S_POPUP_QUIT;
     else
         app->quit = 1;
@@ -771,13 +1144,20 @@ s_draw_popups(s_app_t *app)
 
         modal_open = 1;
         igPushTextWrapPos(560.0f);
-        igText("export all %u full plates%s", (unsigned) app->result.sheet_count,
-            app->quit_after_save ? " and quit after saving" : "");
+        if (app->saw_mode)
+            igText("export the saw list and %u plate drawings%s",
+                (unsigned) s_plate_count(app),
+                app->quit_after_save ? " and quit after saving" : "");
+        else
+            igText("export all %u full plates%s", (unsigned) app->result.sheet_count,
+                app->quit_after_save ? " and quit after saving" : "");
         if (getcwd(directory, sizeof directory))
             igTextWrapped("Relative paths are saved in: %s", directory);
         else
             igTextWrapped("Cannot determine the working directory. Choose an absolute path.");
-        if (app->result.multiple_sheets)
+        if (app->saw_mode)
+            igText("base name -> name.csv, name-001.svg, name-002.svg, ...");
+        else if (app->result.multiple_sheets)
             igText("base name -> name-001.svg, name-002.svg, ...");
         igText("Output filename or full path (folder must exist):");
         igSetNextItemWidth(520.0f);
@@ -858,16 +1238,14 @@ s_draw_menu(s_app_t *app)
             if (igMenuItem_Bool("Open...", "Ctrl+O", false, true))
                 app->pending_popup = S_POPUP_OPEN;
             if (igMenuItem_Bool("Reload", "Ctrl+R", false, true)) {
-                if (s_pack_controls_valid(app)
-                    && s_load(app, app->job_path).status == BP_JOB_OK)
-                    s_pack(app);
+                if (s_pack_controls_valid(app) && s_load_any(app, app->job_path))
+                    s_pack_any(app);
             }
             if (igMenuItem_Bool(s_geometry_pending(app) ? "Apply & Pack" : "Pack",
-                "F5", false, app->job != NULL))
+                "F5", false, s_active_job(app) != NULL))
                 s_pack_or_apply(app);
             igSeparator();
-            if (igMenuItem_Bool("Save SVG...", "Ctrl+S", false,
-                app->result.placement_count > 0U))
+            if (igMenuItem_Bool("Save SVG...", "Ctrl+S", false, s_has_result(app)))
                 app->pending_popup = S_POPUP_SAVE;
             igSeparator();
             if (igMenuItem_Bool("Quit", "Ctrl+Q", false, true))
@@ -875,7 +1253,7 @@ s_draw_menu(s_app_t *app)
             igEndMenu();
         }
         if (igBeginMenu("View", true)) {
-            if (igMenuItem_Bool("Fit sheet", NULL, false, app->job != NULL))
+            if (igMenuItem_Bool("Fit sheet", NULL, false, s_active_job(app) != NULL))
                 app->fit_pending = 1;
             (void) igMenuItem_BoolPtr("Part numbers", NULL, &app->show_labels,
                 true);
@@ -907,15 +1285,285 @@ s_handle_shortcuts(s_app_t *app)
     if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_O, false))
         app->pending_popup = S_POPUP_OPEN;
     if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_R, false)) {
-        if (s_pack_controls_valid(app)
-            && s_load(app, app->job_path).status == BP_JOB_OK)
-            s_pack(app);
+        if (s_pack_controls_valid(app) && s_load_any(app, app->job_path))
+            s_pack_any(app);
     }
-    if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_S, false)
-        && app->result.placement_count > 0U)
+    if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_S, false) && s_has_result(app))
         app->pending_popup = S_POPUP_SAVE;
-    if (igIsKeyPressed_Bool(ImGuiKey_F5, false) && app->job)
+    if (igIsKeyPressed_Bool(ImGuiKey_F5, false) && s_active_job(app))
         s_pack_or_apply(app);
+}
+
+/* Where the saw view puts the plate on screen, in pixels per millimetre. */
+typedef struct {
+    ImVec2 origin;
+    float zoom;
+    float plate_height_mm;
+} s_frame_t;
+
+/* Returns the screen rectangle of a plate rectangle given in 0.01 mm. */
+static void
+s_saw_rect(const s_frame_t *frame, uint32_t x, uint32_t y, uint32_t w,
+    uint32_t h, ImVec2 *low, ImVec2 *high)
+{
+    BP_REQUIRE(frame && low && high);
+    /* Screen y grows downwards; plate y grows upwards. */
+    low->x = frame->origin.x + (float) (x / 100.0) * frame->zoom;
+    high->x = low->x + (float) (w / 100.0) * frame->zoom;
+    high->y = frame->origin.y
+        + (frame->plate_height_mm - (float) (y / 100.0)) * frame->zoom;
+    low->y = high->y - (float) (h / 100.0) * frame->zoom;
+}
+
+/* Draws one tree of the plan: items in their part's colour, waste darker. */
+static void
+s_draw_saw_node(s_app_t *app, ImDrawList *draw, const s_frame_t *frame,
+    uint32_t index, uint32_t depth)
+{
+    const bp_cutplan_t *plan = &app->saw.plan;
+    const bp_cut_node_t *node;
+    ImVec2 low;
+    ImVec2 high;
+    uint32_t child;
+
+    BP_REQUIRE(index < plan->node_count);
+    BP_REQUIRE(depth <= BP_CUTPLAN_MAX_STAGES + 1U);
+    node = &plan->nodes[index];
+    if (node->kind == BP_CUT_NODE_PANEL) {
+        for (child = 0U; child < node->child_count; ++child)
+            s_draw_saw_node(app, draw, frame, node->first_child + child,
+                depth + 1U);
+        return;
+    }
+    s_saw_rect(frame, node->x_10um, node->y_10um, node->width_10um,
+        node->height_10um, &low, &high);
+    if (node->kind == BP_CUT_NODE_WASTE) {
+        ImDrawList_AddRectFilled(draw, low, high, 0xff1e1e1e, 0.0f, 0);
+        return;
+    }
+    {
+        uint32_t label = app->saw.job->labels[node->item_index];
+
+        ImDrawList_AddRectFilled(draw, low, high,
+            s_palette[label % S_PALETTE_SIZE], 0.0f, 0);
+        if (app->show_labels && high.x - low.x > 14.0f && high.y - low.y > 14.0f) {
+            char text[32];
+
+            (void) snprintf(text, sizeof text, "%u", (unsigned) label);
+            ImDrawList_AddText_Vec2(draw,
+                s_vec((low.x + high.x) * 0.5f - 6.0f, (low.y + high.y) * 0.5f - 7.0f),
+                0xff101010, text, NULL);
+        }
+    }
+}
+
+/*
+ * Draws the selected plate of a saw plan: the plate grey where the trims go,
+ * the parts and waste, and the cuts made so far as the bands the blade
+ * removes, coloured by stage. The last cut shown is outlined: it is the one
+ * the operator makes at this step.
+ */
+static void
+s_draw_saw_sheet(s_app_t *app)
+{
+    const bp_cutview_t *view = &app->saw.view;
+    const bp_cut_settings_t *settings = &app->saw.settings;
+    ImDrawList *draw = igGetWindowDrawList();
+    ImGuiIO *io = igGetIO();
+    ImVec2 origin;
+    ImVec2 size;
+    ImVec2 low;
+    ImVec2 high;
+    s_frame_t frame;
+    float plate_width_mm;
+    uint32_t index;
+
+    if (!view->plan || view->plan->plate_count == 0U) {
+        igText("%s", view->plan ? "No used plates - see unplaced parts"
+            : "No cutting plan yet");
+        igText(" ");
+    } else {
+        igText("Plate %u / %u%s", (unsigned) view->active_plate + 1U,
+            (unsigned) view->plan->plate_count,
+            view->active_plate + 1U == view->plan->plate_count ? " - last plate" : "");
+        if (view->visible_cuts == 0U) {
+            igText("Step 0 of %u: the plate before the first cut",
+                (unsigned) view->plate_cuts);
+        } else {
+            const bp_cut_t *cut = bp_cutview_cut(view, view->visible_cuts - 1U);
+            char what[24];
+
+            if (cut->stage == 0U)
+                (void) snprintf(what, sizeof what, "edge trim");
+            else
+                (void) snprintf(what, sizeof what, "stage %u",
+                    (unsigned) cut->stage);
+            igText("Cut %u of %u: %s, %s cut at %.2f mm, %.2f to %.2f mm, "
+                "blade %.2f mm", (unsigned) view->visible_cuts,
+                (unsigned) view->plate_cuts, what,
+                cut->axis == BP_CUT_AXIS_X ? "x" : "y",
+                cut->position_10um / 100.0, cut->from_10um / 100.0,
+                cut->to_10um / 100.0, cut->kerf_10um / 100.0);
+        }
+    }
+    origin = igGetCursorScreenPos();
+    size = igGetContentRegionAvail();
+    if (size.x < 32.0f)
+        size.x = 32.0f;
+    if (size.y < 32.0f)
+        size.y = 32.0f;
+    igInvisibleButton("canvas", size, 0);
+    if (!app->saw.job) {
+        ImDrawList_AddText_Vec2(draw, s_vec(origin.x + 12.0f, origin.y + 12.0f),
+            0xff8080ff, "no job loaded", NULL);
+        return;
+    }
+
+    plate_width_mm = (float) (settings->plate_width_10um / 100.0);
+    frame.plate_height_mm = (float) (settings->plate_height_10um / 100.0);
+    if (app->fit_pending) {
+        float by_width = size.x / plate_width_mm;
+        float by_height = size.y / frame.plate_height_mm;
+
+        app->zoom = (by_width < by_height ? by_width : by_height) * 0.94f;
+        app->pan = s_vec(0.0f, 0.0f);
+        app->fit_pending = 0;
+    }
+    if (igIsItemHovered(0)) {
+        if (io->MouseWheel != 0.0f) {
+            float before = app->zoom;
+            float factor = io->MouseWheel > 0.0f ? 1.15f : 1.0f / 1.15f;
+            float focus_x = io->MousePos.x - origin.x - app->pan.x;
+            float focus_y = io->MousePos.y - origin.y - app->pan.y;
+
+            app->zoom *= factor;
+            if (app->zoom < 0.001f)
+                app->zoom = 0.001f;
+            app->pan.x -= focus_x * (app->zoom / before - 1.0f);
+            app->pan.y -= focus_y * (app->zoom / before - 1.0f);
+        }
+        if (igIsMouseDragging(ImGuiMouseButton_Left, -1.0f)) {
+            app->pan.x += io->MouseDelta.x;
+            app->pan.y += io->MouseDelta.y;
+        }
+    }
+    frame.origin = s_vec(origin.x + app->pan.x, origin.y + app->pan.y);
+    frame.zoom = app->zoom;
+
+    ImDrawList_PushClipRect(draw, origin, s_vec(origin.x + size.x, origin.y + size.y),
+        true);
+    s_saw_rect(&frame, 0U, 0U, settings->plate_width_10um,
+        settings->plate_height_10um, &low, &high);
+    /* The whole plate in trim grey; the usable area is drawn over it. */
+    ImDrawList_AddRectFilled(draw, low, high, 0xff5a5a5a, 0.0f, 0);
+    if (view->plan && view->plan->plate_count > 0U) {
+        s_draw_saw_node(app, draw, &frame,
+            view->plan->plates[view->active_plate].root, 0U);
+        for (index = 0U; index < view->visible_cuts; ++index) {
+            const bp_cut_t *cut = bp_cutview_cut(view, index);
+            ImU32 colour = s_stage_colours[cut->stage < S_STAGE_COLOURS
+                ? cut->stage : S_STAGE_COLOURS - 1U];
+
+            if (cut->axis == BP_CUT_AXIS_X)
+                s_saw_rect(&frame, cut->from_10um, cut->position_10um,
+                    cut->to_10um - cut->from_10um, cut->kerf_10um, &low, &high);
+            else
+                s_saw_rect(&frame, cut->position_10um, cut->from_10um,
+                    cut->kerf_10um, cut->to_10um - cut->from_10um, &low, &high);
+            /* At least two pixels, so a thin blade stays visible zoomed out. */
+            if (high.x - low.x < 2.0f) {
+                float middle = (low.x + high.x) * 0.5f;
+
+                low.x = middle - 1.0f;
+                high.x = middle + 1.0f;
+            }
+            if (high.y - low.y < 2.0f) {
+                float middle = (low.y + high.y) * 0.5f;
+
+                low.y = middle - 1.0f;
+                high.y = middle + 1.0f;
+            }
+            ImDrawList_AddRectFilled(draw, low, high, colour, 0.0f, 0);
+            if (index + 1U == view->visible_cuts)
+                ImDrawList_AddRect(draw, s_vec(low.x - 2.0f, low.y - 2.0f),
+                    s_vec(high.x + 2.0f, high.y + 2.0f), 0xff40dfff, 0.0f, 2.0f, 0);
+        }
+    }
+    s_saw_rect(&frame, 0U, 0U, settings->plate_width_10um,
+        settings->plate_height_10um, &low, &high);
+    /* Arguments are (rounding, thickness, flags), not the other way round. */
+    ImDrawList_AddRect(draw, low, high, 0xff909090, 0.0f, 1.5f, 0);
+    ImDrawList_PopClipRect(draw);
+}
+
+/* Counts the parts on one plate of the saw plan, through its tree. */
+static uint32_t
+s_saw_plate_parts(const bp_cutplan_t *plan, uint32_t index, uint64_t *area,
+    uint32_t depth)
+{
+    const bp_cut_node_t *node;
+    uint32_t count = 0U;
+    uint32_t child;
+
+    BP_REQUIRE(plan && area && index < plan->node_count);
+    BP_REQUIRE(depth <= BP_CUTPLAN_MAX_STAGES + 1U);
+    node = &plan->nodes[index];
+    if (node->kind == BP_CUT_NODE_ITEM) {
+        *area += (uint64_t) node->width_10um * node->height_10um;
+        return 1U;
+    }
+    if (node->kind == BP_CUT_NODE_PANEL)
+        for (child = 0U; child < node->child_count; ++child)
+            count += s_saw_plate_parts(plan, node->first_child + child, area,
+                depth + 1U);
+    return count;
+}
+
+/* Lists the saw plan's plates; selecting one changes only the view. */
+static void
+s_draw_saw_plates(s_app_t *app)
+{
+    bp_cutview_t *view = &app->saw.view;
+    const bp_cut_settings_t *settings = &app->saw.settings;
+    uint32_t plate;
+
+    if (!view->plan || view->plan->plate_count == 0U)
+        return;
+    if (igBeginTable("saw plates", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg,
+        s_vec(0.0f, 0.0f), 0.0f)) {
+        igTableSetupColumn("Plate", ImGuiTableColumnFlags_WidthStretch, 0.6f, 0);
+        igTableSetupColumn("Parts", ImGuiTableColumnFlags_WidthStretch, 0.7f, 0);
+        igTableSetupColumn("Used %", ImGuiTableColumnFlags_WidthStretch, 0.8f, 0);
+        igTableSetupColumn("Cuts", ImGuiTableColumnFlags_WidthStretch, 0.7f, 0);
+        igTableHeadersRow();
+        for (plate = 0U; plate < view->plan->plate_count; ++plate) {
+            uint64_t area = 0U;
+            uint32_t parts = s_saw_plate_parts(view->plan,
+                view->plan->plates[plate].root, &area, 0U);
+            uint32_t cuts = 0U;
+            uint32_t index;
+            char label[32];
+
+            for (index = 0U; index < view->cut_count; ++index)
+                cuts += view->cuts[index].plate == plate;
+            igTableNextRow(0, 0.0f);
+            (void) igTableNextColumn();
+            (void) snprintf(label, sizeof label, "%u%s", (unsigned) plate + 1U,
+                plate + 1U == view->plan->plate_count ? "*" : "");
+            if (igSelectable_Bool(label, view->active_plate == plate,
+                ImGuiSelectableFlags_SpanAllColumns, s_vec(0.0f, 0.0f)))
+                bp_cutview_select(view, plate);
+            (void) igTableNextColumn();
+            igText("%u", (unsigned) parts);
+            (void) igTableNextColumn();
+            igText("%.1f", 100.0 * (double) area / ((double) settings->plate_width_10um
+                * settings->plate_height_10um));
+            (void) igTableNextColumn();
+            igText("%u", (unsigned) cuts);
+        }
+        igEndTable();
+    }
+    igText("* last plate");
 }
 
 /* Draws the sheet and the placements, and handles panning and zooming. */
@@ -931,6 +1579,10 @@ s_draw_sheet(s_app_t *app)
     float sheet_height;
     uint32_t index;
 
+    if (app->saw_mode) {
+        s_draw_saw_sheet(app);
+        return;
+    }
     if (app->result.sheet_count > 0U) {
         const bp_sheet_layout_t *sheet = bp_view_active(&app->result);
         double cell = app->result.cell_size_mm;
@@ -1147,7 +1799,7 @@ s_draw_geometry(s_app_t *app)
     int known;
 
     BP_REQUIRE(app);
-    job = app->job;
+    job = s_active_job(app);
     for (index = 0; index < S_PRESET_COUNT; ++index)
         labels[index] = s_presets[index].label;
 
@@ -1185,6 +1837,29 @@ s_draw_geometry(s_app_t *app)
         app->sheet_width_mm = app->sheet_height_mm;
         app->sheet_height_mm = width_mm;
         app->size_preset = S_PRESET_CUSTOM;
+    }
+    /* A saw has no raster: its preview is the plate and what trims leave. */
+    if (app->saw_mode) {
+        if (job && app->size_preset == S_PRESET_JOB)
+            igTextWrapped("plate %.6g x %.6g mm from the job, usable %.6g x %.6g "
+                "mm after trims", job->file_sheet_width_mm,
+                job->file_sheet_height_mm, job->file_sheet_width_mm
+                    - job->trim_left_mm - job->trim_right_mm,
+                job->file_sheet_height_mm - job->trim_bottom_mm - job->trim_top_mm);
+        else if (job)
+            igTextWrapped("plate %.6g x %.6g mm, usable %.6g x %.6g mm after "
+                "trims", app->sheet_width_mm, app->sheet_height_mm,
+                app->sheet_width_mm - job->trim_left_mm - job->trim_right_mm,
+                app->sheet_height_mm - job->trim_bottom_mm - job->trim_top_mm);
+        else
+            igTextWrapped("size from the job file, shown once it is loaded");
+        if (s_geometry_pending(app)) {
+            igPushStyleColor_U32(ImGuiCol_Text, 0xff40dfff);
+            igTextWrapped("not applied yet: showing %.6g x %.6g mm",
+                job->sheet_width_mm, job->sheet_height_mm);
+            igPopStyleColor(1);
+        }
+        return;
     }
     if (igCheckbox("cell from job", &app->cell_from_job) && app->cell_from_job
         && job)
@@ -1228,6 +1903,89 @@ s_draw_geometry(s_app_t *app)
     }
 }
 
+/*
+ * Draws the panel saw's half of the control panel: the saw as the job file
+ * describes it, the plate limit and the search, the plate list, the saw list
+ * replay, and the numbers that go with the plan.
+ */
+static void
+s_draw_saw_controls(s_app_t *app)
+{
+    static const char *const first_cut[] = { "x", "y", "any" };
+    s_saw_t *saw = &app->saw;
+    bp_cutview_t *view = &saw->view;
+
+    igText("panel saw (applies on Pack)");
+    if (saw->job) {
+        const bp_cut_settings_t *settings = &saw->settings;
+
+        igText("kerf %.2f mm, %u stages%s, first cut %s",
+            settings->kerf_10um / 100.0, (unsigned) settings->max_stages,
+            settings->non_exact ? " + sizing" : "",
+            first_cut[settings->first_cut]);
+        igText("trim %.1f %.1f %.1f %.1f, min waste %.1f mm",
+            settings->trim_left_10um / 100.0, settings->trim_right_10um / 100.0,
+            settings->trim_bottom_10um / 100.0, settings->trim_top_10um / 100.0,
+            settings->min_waste_10um / 100.0);
+    }
+    /* 0 places every part, on as many plates as that takes. */
+    (void) igInputInt("max plates", &app->saw_max_plates, 1, 4, 0);
+    (void) igCheckbox("optimise", &app->use_search);
+    if (app->use_search) {
+        igSameLine(0.0f, 12.0f);
+        (void) igCheckbox("fixed rounds", &app->fixed_rounds);
+        if (app->fixed_rounds)
+            (void) igInputInt("rounds", &app->search_rounds, 1, 100, 0);
+        else
+            (void) igSliderFloat("CPU seconds", &app->time_budget_seconds, 0.2f,
+                30.0f, "%.1f", 0);
+    }
+
+    igSeparator();
+    igText("view");
+    (void) igCheckbox("part numbers", &app->show_labels);
+    s_draw_saw_plates(app);
+    if (view->plan && view->plan->plate_count > 0U) {
+        int step = (int) view->visible_cuts;
+
+        if (igSliderInt("saw step", &step, 0, (int) view->plate_cuts, "%d", 0))
+            bp_cutview_set_visible(view, (uint32_t) step);
+        igTextWrapped("Replay of the selected plate's saw list, edge trims first.");
+    }
+
+    igSeparator();
+    if (view->plan) {
+        uint32_t count = saw->job->part_count;
+
+        igTextWrapped("Result: %s", app->result_settings);
+        igText("plates       %u", (unsigned) view->plan->plate_count);
+        igText("placed       %u of %u", (unsigned) view->placed_count,
+            (unsigned) count);
+        igText("unplaced     %u (%u oversized)",
+            (unsigned) (count - view->placed_count),
+            (unsigned) saw->oversized_count);
+        igText("total used   %.2f %%", bp_cutview_utilisation(view) * 100.0);
+        igText("cuts         %u", (unsigned) view->cut_count);
+        igText("search       %u rounds, from %u plates",
+            (unsigned) app->iterations_run, (unsigned) saw->start_plates);
+        igText("time         %.3f CPU s", app->seconds);
+        igText("export       %s", view->saved ? "list and plates saved" : "not saved");
+        if (view->placed_count < count
+            && igCollapsingHeader_TreeNodeFlags("Unplaced parts", 0)) {
+            uint32_t index;
+
+            for (index = 0U; index < count; ++index)
+                if (!saw->placed[index])
+                    igText("part %u, label %u", (unsigned) index + 1U,
+                        (unsigned) saw->job->labels[index]);
+        }
+    }
+    if (saw->job)
+        igTextWrapped("Loaded: %s", app->loaded_path);
+    igSeparator();
+    igTextWrapped("%s", app->status);
+}
+
 /* Draws the control panel and the numbers that go with a packing. */
 static void
 s_draw_controls(s_app_t *app)
@@ -1242,10 +2000,19 @@ s_draw_controls(s_app_t *app)
     int packing = app->multiple_sheets ? 1 : 0;
 
     igText("job file");
+    igSameLine(0.0f, 12.0f);
+    igSetNextItemWidth(150.0f);
+    {
+        static const char *const work_modes[] = { "free nesting", "panel saw" };
+        int work_mode = app->saw_mode ? 1 : 0;
+
+        if (igCombo_Str_arr("##workmode", &work_mode, work_modes, 2, -1))
+            s_switch_mode(app, work_mode == 1);
+    }
     (void) igInputText("##path", app->job_path, sizeof app->job_path, 0, NULL,
         NULL);
     if (igButton("Load", s_vec(80.0f, 0.0f)))
-        (void) s_load(app, app->job_path);
+        (void) s_load_any(app, app->job_path);
     igSameLine(0.0f, 8.0f);
     /* The ### keeps one widget identity while the label changes. */
     if (igButton(s_geometry_pending(app) ? "Apply & Pack###pack" : "Pack###pack",
@@ -1259,6 +2026,10 @@ s_draw_controls(s_app_t *app)
     s_draw_geometry(app);
 
     igSeparator();
+    if (app->saw_mode) {
+        s_draw_saw_controls(app);
+        return;
+    }
     igText("packing (applies on Pack)");
     if (igCombo_Str_arr("packing", &packing, packing_names, 2, -1))
         app->multiple_sheets = packing == 1;
@@ -1585,6 +2356,9 @@ main(int argc, char **argv)
             if (app.max_sheets == 0)
                 return 1;
             app.multiple_sheets = true;
+            app.saw_max_plates = app.max_sheets;
+        } else if (strcmp(argv[argument], "--guillotine") == 0) {
+            app.saw_mode = true;
         } else if (strcmp(argv[argument], "--sheet") == 0 && argument + 1 < argc) {
             selected_sheet = s_parse_count(argv[++argument]);
             if (selected_sheet == 0)
@@ -1639,7 +2413,7 @@ main(int argc, char **argv)
                 "[--frames <n>]\n"
                 "              [--sheets <limit>] [--sheet <1-based index>]\n"
                 "              [--sheet-size <w_mm> <h_mm>] [--cell <mm>]\n"
-                "              [--apply-sheet-size <w_mm> <h_mm>]\n"
+                "              [--apply-sheet-size <w_mm> <h_mm>] [--guillotine]\n"
                 "              [--search <rounds> | --time <CPU seconds>]\n"
                 "              [--step <local count>] [--svg <base path>]\n");
             return 1;
@@ -1685,8 +2459,8 @@ main(int argc, char **argv)
     (void) ImGui_ImplGlfw_InitForOpenGL(window, true);
     (void) ImGui_ImplOpenGL3_Init("#version 130");
 
-    if (s_load(&app, app.job_path).status == BP_JOB_OK)
-        s_pack(&app);
+    if (s_load_any(&app, app.job_path))
+        s_pack_any(&app);
     else if (shot_path || want_export || selected_explicitly || want_apply) {
         (void) fprintf(stderr, "bp_gui: %s\n", app.status);
         exit_code = 1;
@@ -1704,21 +2478,29 @@ main(int argc, char **argv)
             (void) fprintf(stderr, "bp_gui: %s\n", app.status);
     }
     if (!app.quit && selected_explicitly) {
-        if ((uint32_t) selected_sheet > app.result.sheet_count) {
+        if ((uint32_t) selected_sheet > s_plate_count(&app)) {
             (void) fprintf(stderr, "bp_gui: plate %d does not exist (%u used)\n",
-                selected_sheet, (unsigned) app.result.sheet_count);
+                selected_sheet, (unsigned) s_plate_count(&app));
             exit_code = 1;
             app.quit = 1;
+        } else if (app.saw_mode) {
+            bp_cutview_select(&app.saw.view, (uint32_t) selected_sheet - 1U);
         } else {
             bp_view_select(&app.result, (uint32_t) selected_sheet - 1U);
         }
     }
     if (!app.quit && requested_step >= 0) {
-        if (app.result.sheet_count == 0U
-            || (uint32_t) requested_step > bp_view_active(&app.result)->placement_count) {
+        /* A saw step counts cuts; a nesting step counts placed parts. */
+        uint32_t limit = s_plate_count(&app) == 0U ? 0U
+            : app.saw_mode ? app.saw.view.plate_cuts
+            : bp_view_active(&app.result)->placement_count;
+
+        if (s_plate_count(&app) == 0U || (uint32_t) requested_step > limit) {
             (void) fprintf(stderr, "bp_gui: step outside selected plate\n");
             exit_code = 1;
             app.quit = 1;
+        } else if (app.saw_mode) {
+            bp_cutview_set_visible(&app.saw.view, (uint32_t) requested_step);
         } else {
             bp_view_set_visible(&app.result, (uint32_t) requested_step);
         }
@@ -1821,6 +2603,7 @@ main(int argc, char **argv)
     glfwTerminate();
     if (app.job)
         bp_job_destroy(&app.job);
+    s_saw_free(&app.saw);
     free(app.sheets);
     free(app.scratch_sheets);
     return exit_code;

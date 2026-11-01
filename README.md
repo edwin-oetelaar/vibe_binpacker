@@ -2,13 +2,24 @@
 
 *[Deze pagina in het Nederlands](README.nl.md)*
 
-Given a set of shapes and a plate size, this decides where to cut each
-part across one or more identical plates, aiming to waste as little material
-as possible. Arbitrary simple polygons, holes, quarter turns, and a guaranteed
-gap between parts. The solver is deterministic C11 with no allocation in the
-hot path; Python does the tooling and a separate program does the viewer.
+Given a set of parts and a plate size, this decides how to cut them from one
+or more identical plates with as little waste as possible. It has two
+solvers, for two kinds of machine:
 
-**New: pick the plate.** Every standard plate size is a preset, any
+- **Free nesting**, for laser, plasma, waterjet and CNC router: arbitrary
+  simple polygons, holes, any angle, and a guaranteed gap between parts.
+- **Guillotine cutting**, for panel and circular saws: rectangles, every cut
+  straight from edge to edge, and a saw list in the order the saw works.
+
+Both are deterministic C11 with no allocation in the hot path; Python does
+the tooling and a separate program does the viewer.
+
+**New: a solver for the saw.** `bp_pack --guillotine` turns a job into a plan
+a panel saw can cut, with the saw list, a drawing per plate and a search that
+saves plates. [Why it exists](#why-there-is-a-saw-solver) ·
+[Cutting on a panel saw](#cutting-on-a-panel-saw).
+
+**Also new: pick the plate.** Every standard plate size is a preset, any
 rectangular plate or remnant can be typed in, and the job file stays as it is.
 That makes this usable in real production planning: nest the same job for the
 laser bed, the router table or the saw's stock, and see straight away what it
@@ -25,7 +36,8 @@ It is free to use and to learn from. It is also a worked example of how I
 approach optimisation problems, which is the other reason it is here — see
 [when a good algorithm is not the answer](#when-a-good-algorithm-is-not-the-answer).
 
-**Contents** — [Quick start](#quick-start) ·
+**Contents** — [Two solvers](#two-solvers-two-kinds-of-machine) ·
+[Quick start](#quick-start) ·
 [Multiple plates](#multiple-plates-and-the-last-bounding-box) · [Plate sizes](#plate-sizes) ·
 [How it works](#how-it-works) ·
 [Job format](#the-job-format) · [Viewer](#the-viewer) · [Build](#build) ·
@@ -35,6 +47,43 @@ approach optimisation problems, which is the other reason it is here — see
 [Work with me](#work-with-me)
 
 ---
+
+## Two solvers, two kinds of machine
+
+| | free nesting | guillotine cutting |
+| --- | --- | --- |
+| machines | laser, plasma, waterjet, CNC router | panel saw, beam saw, circular saw |
+| parts | any simple polygon, holes, any angle | rectangles, turned or held by grain |
+| cuts | the tool follows any path | straight, edge to edge, in stages |
+| between parts | a guaranteed gap | the blade width, and nothing narrower than the saw can cut off |
+| model | a 1 mm bit grid, conservatively rounded | an exact tree of cuts in 0.01 mm |
+| you get | an SVG per plate | a saw list in cutting order, and an SVG per plate |
+| run | `bp_pack --sheets 4 job` | `bp_pack --guillotine job` |
+
+The same job file serves both: free nesting ignores the saw lines, the saw
+ignores the clearance. Both have a search on top, both use the same plate
+sizes, and both are checked by a program that does not trust the solver.
+
+### Why there is a saw solver
+
+At Fontys we build robots, and robots need crates to travel in. The students
+designed the crates and made a cut list for the panels. They had not yet
+heard of the guillotine method, and so the Hornbach store where we had the
+panels cut had quite a challenge getting all the pieces out. A panel saw cuts
+straight through, edge to edge; a list that ignores that leaves the person at
+the saw to work it out.
+
+We could have avoided that with our own solver. So now it has a guillotine
+mode: give it the parts and the saw, and it returns a plan the saw can cut,
+in stages, with the list in the order the operator works. That closes the
+circle: we ran into a problem, and we solved it.
+
+It is also exactly the kind of problem our engineers at Fontys can help with.
+They do not have to invent the algorithms or prove them; the literature has
+done that, and [RESEARCH.md](RESEARCH.md) shows where. Their work is research
+of another kind: find out what exists, choose, build it into something that
+runs, and make measurable what works and what does not. That is a different
+kind of creativity.
 
 ## Quick start
 
@@ -229,23 +278,78 @@ blade width or a waste strip the saw can cut off; nothing in between is ever
 left. Each plan is checked twice: by `bp_cutplan_check` in C before it is
 written, and by `tools/check_cutplan.py`, which ignores the plan and saws the
 list cut by cut. `--sheets` limits the plates and `--sheet-size` overrides the
-plate. Options that only mean something for free nesting, such as `--search`,
+plate. Options that only mean something for free nesting, such as `--cell`,
 are refused rather than ignored.
+
+`--search <rounds>` or `--time <seconds>` adds a search on top: it changes
+the order the parts are taken in and which way they prefer to turn, packs
+each variant completely, and keeps the best by more parts placed, then fewer
+plates, then a larger strip left on the last plate, then fewer cuts. Every
+plan it looks at is a complete, sawable one. With a fixed number of rounds the
+result is the same on every run.
+
+```sh
+./build/bp_pack --guillotine --search 300 --cutlist build/saw.csv jobs/saw.job
+```
 
 What it achieves today, measured with `python3 tools/measure_guillotine.py`:
 
-| | |
-| --- | --- |
-| `jobs/saw.job` | 32 parts on 3 plates, 60 cuts; the area bound is 2 plates |
-| `demo`, `dense`, `multisheet` | the same number of plates as free nesting with search |
-| ten standard 2D bin packing classes, 500 instances | 1.24 times the area lower bound with quarter turns, 1.28 without |
+| | construction | with 300 search rounds |
+| --- | --- | --- |
+| `jobs/saw.job` | 32 parts on 3 plates, 60 cuts | 3 plates, 58 cuts |
+| ten standard 2D bin packing classes, 500 instances, quarter turns | 1.109 x the lower bound | 1.074 x |
+| the same, fixed orientation | 1.146 x | 1.108 x |
+| `demo`, `dense`, `multisheet` | as many plates as free nesting with search | |
 
-The area bound is optimistic: for classes of large parts the true optimum is
-well above it, so the ratio overstates the gap. The instances follow the
-published class definitions but are generated here, so they do not compare
-with numbers in the literature directly. This is the constructive baseline;
-search over the order and turns, and the viewer, come next (P9 in
-[PLAN.md](PLAN.md)).
+The lower bound per instance is the larger of the area bound and the number
+of parts wider and taller than half the plate, since no two of those share a
+plate. It is still optimistic, so the ratios overstate the gap. For the
+kitchen job the area bound is 2 plates. The class instances follow the
+published definitions but are generated here, so they do not compare with
+numbers in the literature directly.
+
+**Against the state of the art.** PackingSolver (Fontan & Libralesso, MIT
+licence) won the ROADEF/EURO 2018 glass cutting challenge and is the
+reference for staged guillotine packing. `tools/compare_packingsolver.py` runs
+both on the same 500 instances with the same three-stage saw:
+
+| | bp_pack | bp_pack, 300 search rounds | PackingSolver |
+| --- | ---: | ---: | ---: |
+| plates, fixed orientation (bound 7181) | 7646 | 7391 | 7266 |
+| plates, quarter turns (bound 6891) | 7398 | 7164 | 6984 |
+| computing time, all runs | 59 CPU s for construction and search together | | 14.4 hours, up to 30 s per instance |
+
+PackingSolver is the better solver: our search needs 1.7 % more plates with
+fixed orientation and 2.6 % more with quarter turns, and PackingSolver stays
+within 1.3 % of the bound (here also its own, stronger one). Ours answers in
+about a nine-hundredth of the time. When every plate counts and minutes are
+available, use PackingSolver; this one is for an answer in milliseconds,
+inside the same program as the nesting solver and its independent checks.
+
+#### In the viewer
+
+![The viewer in panel saw mode: plate 1 of the kitchen job at cut 14 of 30, stage 1 cuts red, stage 2 blue, the current cut outlined in yellow.](docs/gui_guillotine.png)
+
+```sh
+./build/bp_gui jobs/saw.job --guillotine
+```
+
+Choose **panel saw** next to the job file to switch modes; a job without a
+kerf line stays in free nesting and says why. The plate list shows parts,
+utilisation and cuts per plate. The **saw step** slider replays the selected
+plate's saw list in operator order, edge trims first, and the line above the
+plate names the current cut: stage, direction, position, extent and blade
+width. Cuts are drawn as the band the blade removes, coloured by stage, with
+the current one outlined in yellow. **max plates** limits the plates (0 for
+as many as the parts need) and **optimise** runs the search. **Save** writes
+`name.csv` and `name-001.svg` onwards, the files `tools/check_cutplan.py
+--svg` reads. The plate size controls work the same as in free nesting.
+
+`--guillotine`, `--sheet`, `--step`, `--search` and `--svg` do the same from
+the command line, and `python3 tools/check_gui_guillotine.py` checks it in
+the real window: stage colours appear exactly when the replay reaches those
+cuts, the drawn plate has the plate's proportions, and every export passes
+the independent check.
 
 Measured with `python3 tools/measure_sheet_sizes.py --gui` on `jobs/demo.job`
 (x86-64, WSL2; median CPU time and largest peak resident memory of three

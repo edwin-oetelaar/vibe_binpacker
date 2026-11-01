@@ -526,7 +526,7 @@ Each phase ends with tests green and a benchmark number recorded.
 | P7 | GUI viewer and stepper                                            | **done**: `pixi run gui`, pan and zoom, step slider, live re-pack |
 | P8 | multiple sheets, remnant tracking, DXF import/export              | **partial**: identical sheets and final-box-area search built; remnant inventory and DXF remain |
 | P8a | selectable plate sizes, presets, raster budget                   | **done**: `--sheet-size` in CLI and viewer, budget enforced, memory and time measured ([plan](docs/plan_plaatformaten.md)) |
-| P9 | guillotine cutting: layouts made only of edge-to-edge saw lines   | **G0-G2 done**: `bp_pack --guillotine` writes a checked saw list and drawings; constructive baseline at 1.24x the area bound on ten standard classes; search (G3) and viewer (G4) planned ([plan](docs/plan_guillotine.md)) |
+| P9 | guillotine cutting: layouts made only of edge-to-edge saw lines   | **G0-G4 done**: `bp_pack --guillotine [--search]` writes a checked saw list and drawings, and the viewer replays it cut by cut; 1.07x a lower bound on ten standard classes with search ([plan](docs/plan_guillotine.md)) |
 
 ## 9. Open questions
 

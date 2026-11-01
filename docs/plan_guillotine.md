@@ -1,6 +1,7 @@
 # Plan: guillotineversnijding voor plaat- en balkzagen
 
-Status: G0, G1 en G2 klaar, G3 tot en met G5 open. Roadmap: P9 in `PLAN.md`.
+Status: G0 tot en met G4 klaar; G5 alleen bij gemeten noodzaak. Roadmap: P9
+in `PLAN.md`.
 
 - G0: `bp_cutplan` (model, controle en zaaglijst) in `include/bp_cutplan.h`,
   getest in `tests/test_bp_cutplan.c`; het zaaglijstformaat in
@@ -22,6 +23,22 @@ Status: G0, G1 en G2 klaar, G3 tot en met G5 open. Roadmap: P9 in `PLAN.md`.
   met de meeste oppervlakte. Elk resultaat gaat door `bp_cutplan_check`
   voordat het wordt geschreven; 300 willekeurige opdrachten per `make test`,
   een derde daarvan ook door `check_cutplan.py`. Metingen in sectie 9.
+
+- G3: `bp_cutsearch`, lokaal zoeken over de volgorde en de draaivoorkeur
+  per onderdeel, met `bp_guillotine_pack` als decoder; `bp_pack --guillotine
+  --search/--time`. Zetten: twee onderdelen verwisselen, een onderdeel
+  verplaatsen, gericht een onderdeel van de laatste plaat of een
+  niet-geplaatst onderdeel naar voren halen, en een draaivoorkeur omdraaien.
+  Een kandidaat die niet slechter is wordt de huidige; het beste plan blijft
+  bewaard. Herhaalbaar bij vaste rondes en seed. Metingen in sectie 10.
+
+- G4: de viewer in zaagmodus. `bp_cutview` houdt, los van ImGui en getest
+  in `tests/test_bp_cutview.c`, de plaatselectie, de stapschuif door de
+  zaaglijst, de benutting en de export (`naam.csv` en `naam-001.svg`) bij.
+  `bp_gui` krijgt een moduskeuze, een eigen bediening, platenlijst en
+  tekening met sneden per stadium, en `--guillotine`.
+  `tools/check_gui_guillotine.py` controleert pixels, export en weigeringen
+  in het echte venster.
 
 Afwijkingen van het oorspronkelijke plan in G1:
 
@@ -332,6 +349,98 @@ Wat de metingen zeggen:
 - Vergelijking met de literatuur en met PackingSolver vraagt de gepubliceerde
   instantiebestanden. Dat hoort bij G3, als er een zoeklaag is om te
   vergelijken.
+
+## 10. Metingen G3
+
+Dezelfde instanties als in sectie 9, nu tegen een sterkere ondergrens: per
+instantie de grootste van de oppervlaktegrens en het aantal onderdelen dat
+breder en hoger is dan de halve plaat (twee daarvan passen nooit samen). Dat
+maakt klasse IX pas zinvol. Constructie tegenover 300 zoekrondes per instantie.
+
+| klasse | grens | vast | vast, gezocht | kwartslagen | kwartslagen, gezocht |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| I | 926 | 1041 (1.124) | 1006 (1.086) | 1004 (1.084) | 985 (1.064) |
+| II | 127 | 132 (1.039) | 128 (1.008) | 128 (1.008) | 127 (1.000) |
+| III | 642 | 780 (1.215) | 744 (1.159) | 744 (1.159) | 706 (1.100) |
+| IV | 119 | 129 (1.084) | 127 (1.067) | 127 (1.067) | 126 (1.059) |
+| V | 848 | 1030 (1.215) | 979 (1.154) | 993 (1.171) | 949 (1.119) |
+| VI | 108 | 122 (1.130) | 117 (1.083) | 115 (1.065) | 114 (1.056) |
+| VII | 729 | 897 (1.230) | 855 (1.173) | 856 (1.174) | 809 (1.110) |
+| VIII | 723 | 897 (1.241) | 859 (1.188) | 852 (1.178) | 796 (1.101) |
+| IX | 1994 | 2092 (1.049) | 2071 (1.039) | 2071 (1.039) | 2059 (1.033) |
+| X | 453 | 526 (1.161) | 505 (1.115) | 508 (1.121) | 493 (1.088) |
+| alle | 6669 | 7646 (1.146) | 7391 (1.108) | 7398 (1.109) | 7164 (1.074) |
+
+De 2000 runs samen kostten 46 CPU-seconden, opstarten inbegrepen.
+
+`jobs/saw.job`: met en zonder zoeken 3 platen; zoeken brengt de zaaglijst van
+60 naar 58 sneden (bij 2000 rondes 53). De oppervlaktegrens is 2 platen; een
+handmatige poging vond geen indeling op 2 platen binnen deze zaagblad-, nerf-
+en stadiumgrenzen, maar dat is geen bewijs.
+
+Wat de metingen zeggen:
+
+- De zoeklaag wint in elke klasse, in beide varianten: over alles 3,3 % minder
+  platen met vaste richting en 3,2 % met kwartslagen.
+- De grootste winst zit in de klassen met veel lange of hoge onderdelen (VII,
+  VIII) en met veel verschillende maten (III, V). Daar doet de volgorde ertoe.
+- Waar de grens al bijna gehaald wordt (II, IX) valt weinig te winnen.
+
+## 11. Vergelijking met PackingSolver
+
+`tools/compare_packingsolver.py`, met PackingSolver 0.1.1264 (MIT) in een
+aparte Python-omgeving als meetinstrument, niet als afhankelijkheid. Dezelfde
+500 instanties, voor beide dezelfde zaag: drie stadia plus maatsnede
+(`NonExact`, de ROADEF-definitie), eerste snede vrij, geen zaagsnede.
+PackingSolver in zijn deterministische modus met 30 s per instantie. De grens
+is per instantie de sterkste van onze eenvoudige grens en die van
+PackingSolver zelf. Elke zaaglijst van bp_pack ging door `check_cutplan.py`;
+PackingSolver controleert zijn oplossingen zelf.
+
+| klasse | draaien | grens | bp_pack | bp_pack, gezocht | PackingSolver |
+| --- | --- | ---: | ---: | ---: | ---: |
+| I | nee | 987 | 1041 (1.055) | 1006 (1.019) | 996 (1.009) |
+| I | ja | 972 | 1004 (1.033) | 985 (1.013) | 976 (1.004) |
+| II | nee | 127 | 132 (1.039) | 128 (1.008) | 127 (1.000) |
+| II | ja | 127 | 128 (1.008) | 127 (1.000) | 127 (1.000) |
+| III | nee | 710 | 780 (1.099) | 744 (1.048) | 721 (1.015) |
+| III | ja | 671 | 744 (1.109) | 706 (1.052) | 681 (1.015) |
+| IV | nee | 119 | 129 (1.084) | 127 (1.067) | 126 (1.059) |
+| IV | ja | 119 | 127 (1.067) | 126 (1.059) | 119 (1.000) |
+| V | nee | 939 | 1030 (1.097) | 979 (1.043) | 953 (1.015) |
+| V | ja | 908 | 993 (1.094) | 949 (1.045) | 915 (1.008) |
+| VI | nee | 108 | 122 (1.130) | 117 (1.083) | 113 (1.046) |
+| VI | ja | 108 | 115 (1.065) | 114 (1.056) | 113 (1.046) |
+| VII | nee | 830 | 897 (1.081) | 855 (1.030) | 837 (1.008) |
+| VII | ja | 738 | 856 (1.160) | 809 (1.096) | 764 (1.035) |
+| VIII | nee | 828 | 897 (1.083) | 859 (1.037) | 835 (1.008) |
+| VIII | ja | 733 | 852 (1.162) | 796 (1.086) | 753 (1.027) |
+| IX | nee | 2070 | 2092 (1.011) | 2071 (1.000) | 2070 (1.000) |
+| IX | ja | 2058 | 2071 (1.006) | 2059 (1.000) | 2058 (1.000) |
+| X | nee | 463 | 526 (1.136) | 505 (1.091) | 488 (1.054) |
+| X | ja | 457 | 508 (1.112) | 493 (1.079) | 478 (1.046) |
+| alle | vast | 7181 | 7646 (1.065) | 7391 (1.029) | 7266 (1.012) |
+| alle | draaien | 6891 | 7398 (1.074) | 7164 (1.040) | 6984 (1.013) |
+
+Rekentijd: bp_pack 59 CPU-seconden voor alle 2000 runs, constructie en zoeken
+samen, opstarten inbegrepen; PackingSolver 51.876 s volgens zijn eigen
+opgave, ongeveer 14,4 uur.
+
+Wat de vergelijking zegt:
+
+- PackingSolver is beter: 1,7 % minder platen bij vaste richting, 2,6 % met
+  kwartslagen. Hij zit binnen 1,3 % van de grens.
+- Het verschil zit vooral in de klassen met lange of hoge onderdelen en
+  kwartslagen (VII, VIII) en in de gemengde klassen (III, V). Waar beide de
+  grens halen (II, IX) is er geen verschil.
+- bp_pack doet het in ongeveer een negenhonderdste van de tijd. Voor een
+  zaaglijst die direct klaar moet zijn is dat de afweging; als elke plaat telt
+  en er minuten zijn, is PackingSolver de betere keuze.
+- De sterkere grens van PackingSolver laat zien dat onze eenvoudige grens bij
+  sommige klassen te optimistisch was (VII, VIII); de verhoudingen in sectie 10
+  overdreven het gat daar.
+- G5 (tree search) blijft open. Als het gat in de praktijk gaat tellen, is het
+  verschil met PackingSolver de maat waarlangs het gemeten wordt.
 
 ## Bronnen
 

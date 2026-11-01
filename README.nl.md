@@ -2,14 +2,25 @@
 
 *[This page in English](README.md)*
 
-Je geeft het een set onderdelen en een plaatmaat, en het verdeelt de onderdelen
-over een of meer identieke platen, met zo min mogelijk materiaalverlies.
-Willekeurige polygonen, gaten, kwartslagen, en een gegarandeerde tussenruimte
-tussen de onderdelen. De solver is deterministische C11 die tijdens het rekenen
-niets alloceert; het gereedschap eromheen is Python en de viewer is een apart
-programma.
+Je geeft het een set onderdelen en een plaatmaat, en het bepaalt hoe je ze uit
+een of meer identieke platen haalt met zo min mogelijk materiaalverlies. Er
+zijn twee solvers, voor twee soorten machines:
 
-**Nieuw: kies de plaat.** Elk standaard plaatformaat is een preset, elke
+- **Vrije nesting**, voor laser, plasma, waterstraal en CNC-frees: willekeurige
+  polygonen, gaten, elke hoek, en een gegarandeerde tussenruimte.
+- **Guillotineversnijding**, voor plaat- en cirkelzagen: rechthoeken, elke
+  snede recht van rand tot rand, en een zaaglijst in de volgorde van de zaag.
+
+Beide zijn deterministische C11 die tijdens het rekenen niets alloceert; het
+gereedschap eromheen is Python en de viewer is een apart programma.
+
+**Nieuw: een solver voor de zaag.** `bp_pack --guillotine` maakt van een
+opdracht een plan dat een plaatzaag kan zagen, met de zaaglijst, een tekening
+per plaat en een zoeklaag die platen bespaart.
+[Waarom die er is](#waarom-er-een-zaagsolver-is) ·
+[Zagen op een plaatzaag](#zagen-op-een-plaatzaag).
+
+**Ook nieuw: kies de plaat.** Elk standaard plaatformaat is een preset, elke
 rechthoekige plaat of elk reststuk kun je zelf invullen, en het jobbestand
 blijft zoals het is. Daarmee is dit bruikbaar in een echte productieplanning:
 nest dezelfde opdracht voor het laserbed, de freestafel of de voorraad van de
@@ -28,7 +39,8 @@ hoe ik optimalisatievraagstukken aanpak, en dat is de tweede reden dat het hier
 staat — zie [wanneer een goed algoritme niet
 genoeg is](#wanneer-een-goed-algoritme-niet-genoeg-is).
 
-**Inhoud** — [Snel starten](#snel-starten) ·
+**Inhoud** — [Twee solvers](#twee-solvers-twee-soorten-machines) ·
+[Snel starten](#snel-starten) ·
 [Meerdere platen](#meerdere-platen-en-de-laatste-bounding-box) · [Plaatformaten](#plaatformaten) ·
 [Hoe het werkt](#hoe-het-werkt) ·
 [Jobformaat](#het-jobformaat) · [Viewer](#de-viewer) · [Bouwen](#bouwen) ·
@@ -38,6 +50,45 @@ genoeg is](#wanneer-een-goed-algoritme-niet-genoeg-is).
 [Samenwerken](#samenwerken)
 
 ---
+
+## Twee solvers, twee soorten machines
+
+| | vrije nesting | guillotineversnijding |
+| --- | --- | --- |
+| machines | laser, plasma, waterstraal, CNC-frees | plaatzaag, balkzaag, cirkelzaag |
+| onderdelen | elke polygoon, gaten, elke hoek | rechthoeken, gedraaid of vast door de nerf |
+| sneden | het gereedschap volgt elke baan | recht, van rand tot rand, in stadia |
+| tussen onderdelen | een gegarandeerde tussenruimte | de zaagbladbreedte, en niets smaller dan de zaag kan afzagen |
+| model | een bitraster van 1 mm, conservatief afgerond | een exacte boom van sneden in 0,01 mm |
+| je krijgt | een SVG per plaat | een zaaglijst in zaagvolgorde, en een SVG per plaat |
+| starten | `bp_pack --sheets 4 job` | `bp_pack --guillotine job` |
+
+Hetzelfde jobbestand dient voor beide: vrije nesting negeert de zaagregels, de
+zaag negeert de tussenruimte. Beide hebben een zoeklaag, beide gebruiken
+dezelfde plaatformaten, en beide worden gecontroleerd door een programma dat
+de solver niet vertrouwt.
+
+### Waarom er een zaagsolver is
+
+Bij Fontys bouwen we robots, en robots hebben kisten nodig om in te reizen. De
+studenten ontwierpen de kisten en maakten een zaaglijst voor de platen. Ze
+hadden nog niet van de guillotinemethode gehoord, en daardoor had de Hornbach
+waar we de platen lieten zagen een aardige uitdaging om alle stukjes te maken.
+Een plaatzaag zaagt recht door, van rand tot rand; een lijst die daar geen
+rekening mee houdt, laat de puzzel over aan wie achter de zaag staat.
+
+Dat hadden we kunnen voorkomen met onze eigen solver. Dus heeft hij nu een
+guillotinemodus: geef hem de onderdelen en de zaag, en je krijgt een plan dat
+de zaag kan zagen, in stadia, met de lijst in de volgorde waarin de zager
+werkt. Daarmee is de cirkel rond: we liepen tegen een probleem aan, en we
+losten het op.
+
+Het is ook precies het soort probleem waar onze engineers bij Fontys bij
+kunnen helpen. Ze hoeven de algoritmen niet te bedenken of te bewijzen; dat
+heeft de literatuur gedaan, en [RESEARCH.md](RESEARCH.md) laat zien waar. Hun
+werk is onderzoek van een andere soort: uitzoeken wat er bestaat, kiezen, het
+inbouwen in iets dat draait, en meetbaar maken wat werkt en wat niet. Dat is
+een andere creativiteit.
 
 ## Snel starten
 
@@ -241,22 +292,82 @@ blijft nooit over. Elk plan wordt twee keer gecontroleerd: door
 `tools/check_cutplan.py`, dat het plan negeert en de zaaglijst snede voor snede
 nazaagt. `--sheets` begrenst het aantal platen en `--sheet-size` vervangt de
 plaatmaat. Opties die alleen voor vrije nesting betekenis hebben, zoals
-`--search`, worden geweigerd in plaats van genegeerd.
+`--cell`, worden geweigerd in plaats van genegeerd.
+
+`--search <rondes>` of `--time <seconden>` voegt er een zoeklaag aan toe: die
+verandert de volgorde waarin de onderdelen worden genomen en welke kant ze bij
+voorkeur op draaien, pakt elke variant volledig in, en houdt de beste over:
+meer onderdelen geplaatst, dan minder platen, dan een grotere reststrook op de
+laatste plaat, dan minder sneden. Elk plan dat hij bekijkt is compleet en
+zaagbaar. Met een vast aantal rondes is de uitkomst bij elke run gelijk.
+
+```sh
+./build/bp_pack --guillotine --search 300 --cutlist build/saw.csv jobs/saw.job
+```
 
 Wat het nu haalt, gemeten met `python3 tools/measure_guillotine.py`:
 
-| | |
-| --- | --- |
-| `jobs/saw.job` | 32 onderdelen op 3 platen, 60 sneden; de oppervlaktegrens is 2 platen |
-| `demo`, `dense`, `multisheet` | evenveel platen als vrije nesting met zoeken |
-| tien standaardklassen voor 2D bin packing, 500 instanties | 1,24 keer de oppervlaktegrens met kwartslagen, 1,28 zonder |
+| | constructie | met 300 zoekrondes |
+| --- | --- | --- |
+| `jobs/saw.job` | 32 onderdelen op 3 platen, 60 sneden | 3 platen, 58 sneden |
+| tien standaardklassen voor 2D bin packing, 500 instanties, met kwartslagen | 1,109 x de ondergrens | 1,074 x |
+| hetzelfde, vaste richting | 1,146 x | 1,108 x |
+| `demo`, `dense`, `multisheet` | evenveel platen als vrije nesting met zoeken | |
 
-De oppervlaktegrens is optimistisch: bij klassen met grote onderdelen ligt het
-echte optimum er ruim boven, dus de verhouding overdrijft het gat. De
-instanties volgen de gepubliceerde klassedefinities maar zijn hier gegenereerd,
-dus ze zijn niet direct vergelijkbaar met getallen uit de literatuur. Dit is
-de constructieve basis; zoeken over volgorde en draaiing, en de viewer, komen
-hierna (P9 in [PLAN.md](PLAN.md)).
+De ondergrens per instantie is de grootste van de oppervlaktegrens en het
+aantal onderdelen dat breder en hoger is dan de halve plaat, omdat twee van
+die nooit samen op een plaat passen. Ook die grens is optimistisch, dus de
+verhoudingen overdrijven het gat. Voor de keukenjob is de oppervlaktegrens 2
+platen. De klasse-instanties volgen de gepubliceerde definities maar zijn hier
+gegenereerd, dus ze zijn niet direct vergelijkbaar met getallen uit de
+literatuur.
+
+**Tegen de stand van de techniek.** PackingSolver (Fontan & Libralesso,
+MIT-licentie) won de ROADEF/EURO-challenge 2018 voor glassnijden en is de
+referentie voor guillotineversnijding in stadia.
+`tools/compare_packingsolver.py` draait beide op dezelfde 500 instanties met
+dezelfde drietrapszaag:
+
+| | bp_pack | bp_pack, 300 zoekrondes | PackingSolver |
+| --- | ---: | ---: | ---: |
+| platen, vaste richting (grens 7181) | 7646 | 7391 | 7266 |
+| platen, kwartslagen (grens 6891) | 7398 | 7164 | 6984 |
+| rekentijd, alle runs | 59 CPU-s voor constructie en zoeken samen | | 14,4 uur, tot 30 s per instantie |
+
+PackingSolver is de betere solver: onze zoeklaag gebruikt 1,7 % meer platen
+bij vaste richting en 2,6 % meer met kwartslagen, en PackingSolver blijft
+binnen 1,3 % van de grens (hier ook zijn eigen, sterkere grens). De onze
+antwoordt in ongeveer een negenhonderdste van de tijd. Telt elke plaat en zijn
+er minuten beschikbaar, gebruik dan PackingSolver; deze is voor een antwoord in
+milliseconden, in hetzelfde programma als de nesting-solver en zijn
+onafhankelijke controles.
+
+#### In de viewer
+
+![De viewer in zaagmodus: plaat 1 van de keukenjob bij snede 14 van 30, sneden van stadium 1 rood, stadium 2 blauw, de huidige snede geel omlijnd.](docs/gui_guillotine.png)
+
+```sh
+./build/bp_gui jobs/saw.job --guillotine
+```
+
+Kies **panel saw** naast het jobbestand om van modus te wisselen; een job
+zonder `kerf`-regel blijft in vrije nesting en zegt waarom. De platenlijst
+toont per plaat onderdelen, benutting en sneden. De schuif **saw step** speelt
+de zaaglijst van de gekozen plaat af in de volgorde van de zager, eerst de
+randbesnoeiing, en de regel boven de plaat noemt de huidige snede: stadium,
+richting, positie, lengte en zaagbladbreedte. Sneden staan getekend als de
+strook die het zaagblad wegneemt, gekleurd per stadium, met de huidige snede
+geel omlijnd. **max plates** begrenst het aantal platen (0 voor zoveel als de
+onderdelen nodig hebben) en **optimise** start de zoeklaag. **Save** schrijft
+`naam.csv` en `naam-001.svg` en verder, de bestanden die
+`tools/check_cutplan.py --svg` leest. De plaatformaat-instellingen werken net
+als bij vrije nesting.
+
+`--guillotine`, `--sheet`, `--step`, `--search` en `--svg` doen hetzelfde
+vanaf de opdrachtregel, en `python3 tools/check_gui_guillotine.py` controleert
+het in het echte venster: de kleuren per stadium verschijnen precies als de
+weergave die sneden bereikt, de getekende plaat heeft de verhoudingen van de
+plaat, en elke export komt door de onafhankelijke controle.
 
 Gemeten met `python3 tools/measure_sheet_sizes.py --gui` op `jobs/demo.job`
 (x86-64, WSL2; mediaan van de CPU-tijd en grootste piek van het residente
