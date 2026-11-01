@@ -29,7 +29,8 @@
  * over at the end, which is the remnant a saw shop puts back on the rack.
  * The result is deterministic.
  *
- * This is the G2 baseline of docs/plan_guillotine.md: no search yet.
+ * The order and the turn preferences can come from the caller instead, which
+ * is how bp_cutsearch uses this packer as the decoder of its search.
  */
 
 typedef enum {
@@ -45,6 +46,16 @@ typedef struct {
     uint32_t item_count;
     /* Most plates to use, at least 1. */
     uint32_t max_plates;
+    /*
+     * Optional: the order items are taken in, a permutation of 0 to
+     * item_count - 1. NULL uses bp_guillotine_default_order.
+     */
+    const uint32_t *order;
+    /*
+     * Optional, per item: 1 makes the packer try the turn it would otherwise
+     * not prefer, wherever it picks a turn. NULL biases nothing.
+     */
+    const uint8_t *turn_bias;
     /* Written: the plan's trees and plates. */
     bp_cut_node_t *nodes;
     uint32_t node_capacity;
@@ -73,6 +84,14 @@ bp_guillotine_node_capacity(uint32_t item_count, uint32_t max_plates);
 /* Returns the plate capacity a packing can use: never more than its items. */
 uint32_t
 bp_guillotine_plate_capacity(uint32_t item_count, uint32_t max_plates);
+
+/*
+ * Writes the default order: longest side first, then shortest side first,
+ * then by index. order must hold count entries.
+ */
+void
+bp_guillotine_default_order(const bp_cut_item_t *items, uint32_t count,
+    uint32_t *order);
 
 /* Returns the scratch words a packing of item_count items needs. */
 uint32_t

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Measure the guillotine packer: plates against the area bound, and the price
-of sawability against free nesting.
+"""Measure the guillotine packer: plates against a lower bound, construction
+against search, and the price of sawability against free nesting.
 
 Three measurements, all repeatable:
 
@@ -8,8 +8,7 @@ Three measurements, all repeatable:
    Berkey & Wang (1987) and VII-X of Martello & Vigo (1998), with 20 to 100
    items, ten instances each. The instances are generated here from the class
    definitions with a fixed seed: they are not the published instance files,
-   so the numbers compare with the area lower bound, not with the
-   literature. Measured with fixed orientation and with quarter turns, no
+   so the numbers compare with a lower bound, not with the literature. Measured with fixed orientation and with quarter turns, no
    kerf, no trims, as in the classical problem.
 2. The price of sawability: the rectangle-only example jobs nested freely on
    several plates and cut on a three-stage saw with the job's clearance as
@@ -72,6 +71,18 @@ def martello_vigo(name, count, rng):
     return side, items
 
 
+def lower_bound(side, items):
+    """The larger of two simple bounds on the plates any packing needs.
+
+    The area bound, and the number of items wider and taller than half the
+    bin: no two of those fit one bin, guillotine or not. The second is what
+    makes the bound meaningful for classes of large items.
+    """
+    area = math.ceil(sum(w * h for w, h in items) / (side * side))
+    large = sum(1 for w, h in items if 2 * w > side and 2 * h > side)
+    return max(area, large)
+
+
 def run(command):
     """Run bp_pack; return (exit status, stdout, its reported CPU seconds)."""
     process = subprocess.run(command, capture_output=True, text=True)
@@ -86,9 +97,10 @@ def plates_used(out):
     return int(re.search(r"plates\s+(\d+) used", out).group(1))
 
 
-def saw(binary, job, cutlist):
-    """Pack a job on the saw, check its cut list, return (plates, summary)."""
-    status, out, seconds = run([str(binary), "--guillotine", "--cutlist",
+def saw(binary, job, cutlist, rounds=0):
+    """Pack a job on the saw, check its cut list, return (status, summary, s)."""
+    search = ["--search", str(rounds)] if rounds else []
+    status, out, seconds = run([str(binary), "--guillotine", *search, "--cutlist",
                                 str(cutlist), str(job)])
     summary = check(cutlist.read_text(encoding="ascii"))
     if summary["plates"] != plates_used(out):
@@ -96,21 +108,23 @@ def saw(binary, job, cutlist):
     return status, summary, seconds
 
 
-def benchmark(binary, work):
+def benchmark(binary, work, rounds):
     """Measurement 1: the ten classes, oriented and with quarter turns."""
-    print("## Standard classes against the area bound\n")
+    print("## Standard classes against a lower bound\n")
     print(f"{INSTANCES} instances per class and size, sizes "
           f"{', '.join(map(str, SIZES))}; plates summed over all 50 instances "
-          "of a class. Ratio = plates / area lower bound; 1.000 would be "
-          "provably optimal.\n")
-    print("| class | bin | bound | oriented | ratio | turns | ratio |")
+          "of a class, as a ratio to the lower bound: per instance the larger "
+          "of the area bound and the count of items wider and taller than half "
+          "the bin (1.000 would be provably optimal). Construction alone, and "
+          f"with {rounds} search rounds.\n")
+    print("| class | bin | bound | oriented | searched | turns | searched |")
     print("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
-    totals = [0, 0, 0]
+    totals = [0, 0, 0, 0, 0]
     before = resource.getrusage(resource.RUSAGE_CHILDREN)
     for name in CLASSES:
         rng = random.Random(f"bp-guillotine-{name}")
         bound = 0
-        plates = [0, 0]
+        plates = [0, 0, 0, 0]
         bin_side = 0
         for count in SIZES:
             for instance in range(INSTANCES):
@@ -118,8 +132,7 @@ def benchmark(binary, work):
                     bin_side, items = berkey_wang(name, count, rng)
                 else:
                     bin_side, items = martello_vigo(name, count, rng)
-                area = sum(w * h for w, h in items)
-                bound += math.ceil(area / (bin_side * bin_side))
+                bound += lower_bound(bin_side, items)
                 for turn in (0, 1):
                     job = work / f"{name}-{count}-{instance}-{turn}.job"
                     lines = [f"sheet {bin_side} {bin_side}", "kerf 0",
@@ -127,21 +140,26 @@ def benchmark(binary, work):
                     lines += [f"rect {i + 1} 1 {w} {h} {turn}"
                               for i, (w, h) in enumerate(items)]
                     job.write_text("\n".join(lines) + "\n", encoding="ascii")
-                    status, summary, _ = saw(binary, job, job.with_suffix(".csv"))
-                    if status != 0:
-                        raise RuntimeError(f"{job}: not every item placed")
-                    plates[turn] += summary["plates"]
+                    for searched, spent in ((0, 0), (1, rounds)):
+                        status, summary, _ = saw(binary, job,
+                                                 job.with_suffix(f".{searched}.csv"),
+                                                 spent)
+                        if status != 0:
+                            raise RuntimeError(f"{job}: not every item placed")
+                        plates[2 * turn + searched] += summary["plates"]
         totals[0] += bound
-        totals[1] += plates[0]
-        totals[2] += plates[1]
-        print(f"| {name} | {bin_side} | {bound} | {plates[0]} | "
-              f"{plates[0] / bound:.3f} | {plates[1]} | {plates[1] / bound:.3f} |")
+        for index in range(4):
+            totals[index + 1] += plates[index]
+        print(f"| {name} | {bin_side} | {bound} | "
+              + " | ".join(f"{plates[index]} ({plates[index] / bound:.3f})"
+                           for index in range(4)) + " |")
     after = resource.getrusage(resource.RUSAGE_CHILDREN)
     spent = (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)
-    print(f"| all | | {totals[0]} | {totals[1]} | {totals[1] / totals[0]:.3f} | "
-          f"{totals[2]} | {totals[2] / totals[0]:.3f} |\n")
-    print(f"All {2 * len(CLASSES) * len(SIZES) * INSTANCES} runs together took "
-          f"{spent:.2f} CPU s, process start-up included.\n")
+    print(f"| all | | {totals[0]} | "
+          + " | ".join(f"{totals[index]} ({totals[index] / totals[0]:.3f})"
+                       for index in range(1, 5)) + " |\n")
+    print(f"All {4 * len(CLASSES) * len(SIZES) * INSTANCES} runs together took "
+          f"{spent:.1f} CPU s, process start-up included.\n")
 
 
 def free_plates(binary, job):
@@ -179,14 +197,17 @@ def price(binary, work):
     print()
 
 
-def kitchen(binary, work):
-    """Measurement 3: the kitchen cabinet example."""
-    _, summary, _ = saw(binary, Path("jobs/saw.job"), work / "saw.csv")
+def kitchen(binary, work, rounds):
+    """Measurement 3: the kitchen cabinet example, built and searched."""
     print("## jobs/saw.job\n")
-    print(f"{summary['placed']} of {summary['ordered']} parts on "
-          f"{summary['plates']} plates of 2800 x 2070 mm, {summary['cuts']} cuts; "
-          f"the parts cover {summary['item_share'] * 100:.1f} % of the plate area, "
-          f"trims and sawdust excluded.\n")
+    for label, spent in (("construction", 0), (f"{rounds} search rounds", rounds)):
+        _, summary, _ = saw(binary, Path("jobs/saw.job"),
+                            work / f"saw-{spent}.csv", spent)
+        print(f"- {label}: {summary['placed']} of {summary['ordered']} parts on "
+              f"{summary['plates']} plates of 2800 x 2070 mm, {summary['cuts']} "
+              f"cuts; the parts cover {summary['item_share'] * 100:.1f} % of the "
+              "plate area, trims and sawdust excluded.")
+    print()
 
 
 def main():
@@ -195,13 +216,15 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--binary", type=Path, default=Path("build/bp_pack"))
     parser.add_argument("--work", type=Path, default=Path("build/guillotine-bench"))
+    parser.add_argument("--rounds", type=int, default=300,
+                        help="search rounds per instance for the searched columns")
     args = parser.parse_args()
     if not args.binary.is_file():
         raise SystemExit("build bp_pack first: pixi run build")
     args.work.mkdir(parents=True, exist_ok=True)
-    benchmark(args.binary, args.work)
+    benchmark(args.binary, args.work, args.rounds)
     price(args.binary, args.work)
-    kitchen(args.binary, args.work)
+    kitchen(args.binary, args.work, args.rounds)
 
 
 if __name__ == "__main__":

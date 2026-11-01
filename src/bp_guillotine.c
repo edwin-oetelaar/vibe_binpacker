@@ -44,6 +44,8 @@ typedef struct {
     const bp_cut_item_t *items;
     uint32_t item_count;
     const uint32_t *order;
+    /* Optional, per item: 1 prefers the turn the packer would not pick. */
+    const uint8_t *turn_bias;
     const uint8_t *placed;
     uint32_t *mark;
     uint32_t stamp;
@@ -112,6 +114,14 @@ s_rest_ok(const s_context_t *context, uint32_t rest)
     BP_REQUIRE(context);
     return rest == 0U || rest <= context->kerf
         || rest - context->kerf >= context->min_waste;
+}
+
+/* Reports whether the search asked for an item's other turn first. */
+static int
+s_biased(const s_context_t *context, uint32_t item)
+{
+    BP_REQUIRE(context && item < context->item_count);
+    return context->turn_bias && context->turn_bias[item];
 }
 
 /* Reports whether an item is free in the candidate being planned. */
@@ -254,8 +264,11 @@ s_fill_stack(s_context_t *context, s_layout_t *layout, bp_cut_axis_t axis,
                 if (kind == 1U && (!context->narrow
                     || !s_rest_ok(context, stack_width - w)))
                     continue;
-                /* Only the first item of each kind counts; its taller turn. */
-                if (found[kind] && (pick_item[kind] != item || h <= pick_h[kind]))
+                /* Only the first item of each kind counts; its taller turn,
+                   or its shorter one when the search biased it. */
+                if (found[kind] && (pick_item[kind] != item
+                    || (s_biased(context, item) ? h >= pick_h[kind]
+                        : h <= pick_h[kind])))
                     continue;
                 found[kind] = 1;
                 pick_item[kind] = item;
@@ -309,7 +322,8 @@ s_fill_strip(s_context_t *context, s_layout_t *layout, bp_cut_axis_t axis,
                 if (h < strip_height && (!context->short_stack
                     || !s_rest_ok(context, strip_height - h)))
                     continue;
-                if (!found || h > best_h) {
+                if (!found || (s_biased(context, item) ? h < best_h
+                    : h > best_h)) {
                     found = 1;
                     best_item = item;
                     best_turn = turn;
@@ -377,6 +391,8 @@ s_plan_plate(s_context_t *context, s_layout_t *layout, bp_cut_axis_t axis,
             /* Try the policy's preferred turn first. */
             pick = valid[1] && ((policy == 0U) == (sizes[1][1] > sizes[0][1]))
                 ? 1U : 0U;
+            if (valid[1] && s_biased(context, item))
+                pick = 1U - pick;
             if (valid[pick] && s_opens_strip(context, length, room,
                 sizes[pick][0], sizes[pick][1]))
                 found = 1;
@@ -696,11 +712,14 @@ s_long_side(const bp_cut_item_t *item)
  * then by index. Insertion sort, stable and deterministic without a context
  * pointer for qsort.
  */
-static void
-s_sort(uint32_t *order, const bp_cut_item_t *items, uint32_t count)
+void
+bp_guillotine_default_order(const bp_cut_item_t *items, uint32_t count,
+    uint32_t *order)
 {
     uint32_t index;
 
+    BP_REQUIRE(items || count == 0U);
+    BP_REQUIRE(order || count == 0U);
     for (index = 0U; index < count; ++index)
         order[index] = index;
     for (index = 1U; index < count; ++index) {
@@ -772,7 +791,8 @@ bp_guillotine_pack(bp_guillotine_args_t args)
         .settings = settings,
         .items = args.items,
         .item_count = args.item_count,
-        .order = args.scratch,
+        .order = args.order ? args.order : args.scratch,
+        .turn_bias = args.turn_bias,
         .placed = args.placed,
         .mark = args.scratch + args.item_count,
         .stamp = 0U,
@@ -789,8 +809,18 @@ bp_guillotine_pack(bp_guillotine_args_t args)
             || (max_stages == 2U && settings->non_exact),
         .strip_rest = max_stages >= 2U || settings->non_exact
     };
-    s_sort(args.scratch, args.items, args.item_count);
     memset(context.mark, 0, (size_t) args.item_count * sizeof *context.mark);
+    if (args.order) {
+        /* A caller's order must be a permutation; the marks check it. */
+        for (item = 0U; item < args.item_count; ++item) {
+            BP_REQUIRE(args.order[item] < args.item_count);
+            BP_REQUIRE(context.mark[args.order[item]] == 0U);
+            context.mark[args.order[item]] = 1U;
+        }
+        memset(context.mark, 0, (size_t) args.item_count * sizeof *context.mark);
+    } else {
+        bp_guillotine_default_order(args.items, args.item_count, args.scratch);
+    }
     layouts[0] = s_layout(args.scratch + 2U * args.item_count, args.item_count);
     layouts[1] = s_layout(args.scratch + 12U * args.item_count, args.item_count);
     build = (s_build_t) {

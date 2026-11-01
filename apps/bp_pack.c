@@ -7,6 +7,7 @@
 #include "bp_cutexport.h"
 #include "bp_cutjob.h"
 #include "bp_cutplan.h"
+#include "bp_cutsearch.h"
 #include "bp_guillotine.h"
 #include "bp_job.h"
 #include "bp_multisheet.h"
@@ -50,7 +51,8 @@ s_usage(void)
         "  --guillotine                cut on a panel saw: staged edge-to-edge\n"
         "                              cuts, rect parts only, the saw from the\n"
         "                              job's kerf/trim/stages lines; --sheets,\n"
-        "                              --sheet-size, --svg and --cutlist apply\n"
+        "                              --sheet-size, --svg, --cutlist, --search\n"
+        "                              and --time apply\n"
         "  --cutlist <path>            with --guillotine: the saw list as CSV\n"
         "  --csv                       CSV summary (multi: one row per sheet)\n"
         "  contact/window/ruin/blink/compact apply to single-sheet search only\n");
@@ -108,6 +110,9 @@ typedef struct {
     double sheet_height_mm;
     /* 0 means as many plates as there are parts. */
     uint32_t max_sheets;
+    /* Search rounds and CPU seconds; both 0 for the constructive plan. */
+    uint32_t iterations;
+    double time_budget_seconds;
     const char *svg_path;
     const char *cutlist_path;
 } s_saw_options_t;
@@ -248,6 +253,9 @@ s_run_guillotine(s_saw_options_t options)
     uint8_t *seen = NULL;
     uint8_t *used = NULL;
     bp_cut_t *cuts = NULL;
+    uint32_t *orders = NULL;
+    uint8_t *bias = NULL;
+    bp_guillotine_args_t pack;
     bp_guillotine_result_t result;
     bp_cutplan_t plan;
     bp_cutplan_check_result_t check;
@@ -303,7 +311,7 @@ s_run_guillotine(s_saw_options_t options)
     }
 
     started = clock();
-    result = bp_guillotine_pack((bp_guillotine_args_t) {
+    pack = (bp_guillotine_args_t) {
         .settings = &settings, .items = items, .item_count = count,
         .max_plates = max_plates,
         .nodes = nodes, .node_capacity = node_capacity,
@@ -312,7 +320,35 @@ s_run_guillotine(s_saw_options_t options)
         .placed = placed,
         .scratch = scratch,
         .scratch_capacity = bp_guillotine_scratch_words(count)
-    });
+    };
+    if (options.iterations > 0U || options.time_budget_seconds > 0.0) {
+        bp_cutsearch_result_t searched;
+
+        orders = calloc(bp_cutsearch_order_words(count) + 1U, sizeof *orders);
+        bias = calloc(3U * (size_t) count + 1U, sizeof *bias);
+        if (!orders || !bias) {
+            (void) fprintf(stderr, "bp_pack: out of memory for the search\n");
+            goto done;
+        }
+        searched = bp_cutsearch_run((bp_cutsearch_args_t) {
+            .pack = pack,
+            .iterations = options.iterations > 0U ? options.iterations
+                : UINT32_MAX,
+            .time_budget_seconds = options.time_budget_seconds,
+            .seed = UINT64_C(0x5deece66d),
+            .scratch_orders = orders,
+            .scratch_order_capacity = bp_cutsearch_order_words(count),
+            .scratch_bias = bias,
+            .scratch_bias_capacity = 3U * count
+        });
+        result = searched.best;
+        (void) printf("search       %u rounds, %u improvements, %u plates "
+            "before search\n", (unsigned) searched.iterations_run,
+            (unsigned) searched.improvements,
+            (unsigned) searched.start_plate_count);
+    } else {
+        result = bp_guillotine_pack(pack);
+    }
     plan = (bp_cutplan_t) {
         .settings = settings,
         .nodes = nodes, .node_count = result.node_count,
@@ -351,6 +387,8 @@ done:
     free(seen);
     free(used);
     free(cuts);
+    free(orders);
+    free(bias);
     bp_job_destroy(&job);
     return exit_code;
 }
@@ -578,11 +616,9 @@ main(int argc, char **argv)
                 s_usage();
             max_sheets = (uint32_t) value;
         } else if (strcmp(item, "--search") == 0 && argument + 1 < argc) {
-            raster_options = 1;
             search_iterations = (unsigned long) strtoul(argv[++argument],
                 NULL, 10);
         } else if (strcmp(item, "--time") == 0 && argument + 1 < argc) {
-            raster_options = 1;
             time_budget_seconds = strtod(argv[++argument], NULL);
             if (!isfinite(time_budget_seconds) || !(time_budget_seconds > 0.0))
                 s_usage();
@@ -654,6 +690,8 @@ main(int argc, char **argv)
             .sheet_width_mm = sheet_width_mm,
             .sheet_height_mm = sheet_height_mm,
             .max_sheets = max_sheets,
+            .iterations = (uint32_t) search_iterations,
+            .time_budget_seconds = time_budget_seconds,
             .svg_path = svg_path,
             .cutlist_path = cutlist_path
         });
