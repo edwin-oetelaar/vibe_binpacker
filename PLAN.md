@@ -361,6 +361,32 @@ bounding box height so the unused part of the plate stays a usable rectangular
 remnant. A packing at 82 % utilisation with a clean 1200x200 strip left is
 worth more than 84 % with waste sprayed everywhere.
 
+### 3.11 Multiple sheets and final-sheet area
+
+The first multi-sheet implementation is `bp_multisheet`, exposed by
+`bp_pack --sheets <limit>`. Identical plates share one reusable bitmap;
+results retain the original part indices and a placement range per plate.
+Oversized parts and an exhausted plate limit produce an explicit partial
+result. No empty plates are emitted.
+
+The multi-sheet objective differs from section 3.10: fewer unplaced pieces,
+then fewer plates, then a smaller **W * H** of the last plate's tight solid
+bounding box. Equal area prefers smaller perimeter, then smaller height.
+Clearance margins are not part of the reported solid box.
+
+Construction carries overflow onto the next plate. Search alternates order
+perturbations (global restarts and local swaps, changing plate assignments)
+with last-container width trials (changing the final layout's aspect ratio).
+Candidates replace the incumbent only when the lexicographic objective
+improves. Buffers are caller owned; the core allocates nothing. A fixed seed
+and iteration count reproduce a run; CPU-time limits are soft and checked
+between complete candidates.
+
+This establishes a constructive multi-sheet baseline, not a proof of
+optimality. It does not yet run separation or overlap-based insertions across
+plates. Reusing that machinery for plate evacuation and two-axis compaction
+is a later refinement. DXF and a persistent remnant inventory are still open.
+
 ## 4. Module layout
 
 Pure C11 core, no allocation in the hot path, caller-owned buffers, `bp_`
@@ -389,6 +415,8 @@ Modules marked **done** exist and are tested.
 | `bp_search`    | **done** ruin and recreate with a time budget               |
 | `bp_penetration`| **done** weighted cell counts with per-row running totals  |
 | `bp_separate`  | **done** guided local search that resolves overlap          |
+| `bp_multisheet`| **done** overflow, order search, final-sheet W * H objective |
+| `bp_view`      | **done** published plate ranges, selection, solid bounds, full-batch SVG export |
 
 The erosion path of section 3.3 will slot in behind the existing `bp_place`
 API as a third mode, tested against the same reference scan.
@@ -473,6 +501,17 @@ and it costs an afternoon, not a week.
 
 ## 8. Roadmap
 
+The viewer now consumes single- and multi-sheet results through `bp_view`.
+It renders one selected plate, a plate-local placement prefix, and the full
+result's tight solid bounding box. The published result's settings and units
+are distinct from pending controls. Plate metadata is allocated when a job
+loads, and a failed replacement load retains the old job and view. Export
+writes every complete plate and commits saved state only after the final
+successful close; partial files survive a failure and are reported.
+`tools/check_gui.py` renders deterministic plate selections, checks actual
+pixels and SVG identities, and rechecks clearance. It needs a real display;
+the portable view/range/export tests run with the normal test suite.
+
 Each phase ends with tests green and a benchmark number recorded.
 
 | phase | content                                                        | done when |
@@ -485,9 +524,20 @@ Each phase ends with tests green and a benchmark number recorded.
 | P5 | holes and part-in-part nesting                                    | a part provably placed inside another's hole |
 | P6 | penetration field, guided local search, squeeze loop (3.9)        | **done**: `shapes.job` used height 504 to 483 mm; wins where reshuffling does not, and the reverse |
 | P7 | GUI viewer and stepper                                            | **done**: `pixi run gui`, pan and zoom, step slider, live re-pack |
-| P8 | multiple sheets, remnant tracking, DXF import/export              | end to end from a real DXF |
+| P8 | multiple sheets, remnant tracking, DXF import/export              | **partial**: identical sheets and final-box-area search built; remnant inventory and DXF remain |
+| P8a | selectable plate sizes, presets, raster budget                   | **done**: `--sheet-size` in CLI and viewer, budget enforced, memory and time measured ([plan](docs/plan_plaatformaten.md)) |
+| P9 | guillotine cutting: layouts made only of edge-to-edge saw lines   | planned: a panel saw can cut every layout in stages |
 
 ## 9. Open questions
+
+Selectable plate sizes are built: presets (500x500, 600x600, 600x300,
+800x600, 1200x1200 and 1250x2500 mm), custom dimensions and shared
+preallocation limits in `bp_sheet`, used by `bp_pack`, `bp_gui` and
+`bp_job_load_with`. The scope is a freely selected rectangular plate per run,
+not a stock cutting plan for a smaller machine bed. The cell and memory caps
+are product guardrails, enforced and measured on representative workloads;
+see [the implementation plan](docs/plan_plaatformaten.md) for the design and
+the measurements.
 
 1. ~~Grid resolution~~ - settled: configurable, default 1.0 mm, 0.5 mm fine
    setting, 0.1 mm rejected as a global search resolution (RESEARCH.md 7).

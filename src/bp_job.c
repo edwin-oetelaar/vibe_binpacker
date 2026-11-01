@@ -7,6 +7,7 @@
 #include "bp_raster.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,6 +84,8 @@ bp_job_status_text(bp_job_status_t status)
         return "job is too large for the chosen cell size";
     case BP_JOB_OUT_OF_MEMORY:
         return "out of memory";
+    case BP_JOB_BAD_OVERRIDE:
+        return "sheet or cell size override must be positive and finite";
     default:
         return "unknown status";
     }
@@ -98,23 +101,6 @@ s_cells_up(double millimetres, double cell_size_mm, int *too_large)
     BP_REQUIRE(cell_size_mm > 0.0);
     BP_REQUIRE(too_large);
     cells = ceil(millimetres / cell_size_mm - 1e-9);
-    if (cells > 1e8) {
-        *too_large = 1;
-        return 1U;
-    }
-    return (uint32_t) cells;
-}
-
-/* Rounds down, so the sheet is never modelled larger than it really is. */
-static uint32_t
-s_cells_down(double millimetres, double cell_size_mm, int *too_large)
-{
-    double cells;
-
-    BP_REQUIRE(millimetres >= 0.0);
-    BP_REQUIRE(cell_size_mm > 0.0);
-    BP_REQUIRE(too_large);
-    cells = floor(millimetres / cell_size_mm + 1e-9);
     if (cells > 1e8) {
         *too_large = 1;
         return 1U;
@@ -212,10 +198,14 @@ s_begin_spec(s_source_t *source, uint32_t id, uint32_t quantity)
     return spec;
 }
 
-/* Parses the file into specifications and the sheet settings. */
+/*
+ * Parses the file into specifications and the sheet settings. sscanf accepts
+ * "nan" and "inf", so the sheet, cell and clearance values are checked for
+ * finiteness here; everything downstream may then rely on real numbers.
+ */
 static bp_job_status_t
-s_parse(const char *path, double cell_size_override_mm, bp_job_t *job,
-    s_source_t *source, unsigned *line_number)
+s_parse(const char *path, bp_job_t *job, s_source_t *source,
+    unsigned *line_number)
 {
     FILE *input = fopen(path, "r");
     char *line = NULL;
@@ -252,17 +242,17 @@ s_parse(const char *path, double cell_size_override_mm, bp_job_t *job,
             *comment = '\0';
 
         if (sscanf(line, " sheet %lf %lf", &a, &b) == 2) {
-            if (a <= 0.0 || b <= 0.0)
+            if (!isfinite(a) || !isfinite(b) || a <= 0.0 || b <= 0.0)
                 goto bad_line;
             job->sheet_width_mm = a;
             job->sheet_height_mm = b;
             have_sheet = 1;
         } else if (sscanf(line, " cell %lf", &a) == 1) {
-            if (a <= 0.0)
+            if (!isfinite(a) || a <= 0.0)
                 goto bad_line;
             job->cell_size_mm = a;
         } else if (sscanf(line, " clearance %lf", &a) == 1) {
-            if (a < 0.0)
+            if (!isfinite(a) || a < 0.0)
                 goto bad_line;
             job->clearance_mm = a;
         } else if (sscanf(line, " rect %u %u %lf %lf %u", &id, &quantity, &a,
@@ -327,8 +317,6 @@ s_parse(const char *path, double cell_size_override_mm, bp_job_t *job,
 
     /* Past this point the failures are about the file as a whole. */
     *line_number = 0U;
-    if (cell_size_override_mm > 0.0)
-        job->cell_size_mm = cell_size_override_mm;
     if (!have_sheet)
         return BP_JOB_NO_SHEET;
     if (source->spec_count == 0U)
@@ -415,18 +403,31 @@ s_workspace_free(s_workspace_t *workspace)
     memset(workspace, 0, sizeof *workspace);
 }
 
-/* Allocates scratch large enough for every orientation of every part. */
+/*
+ * Allocates scratch large enough for every orientation of every part. A part
+ * raster whose scratch would exceed the byte budget sets too_large before
+ * anything is allocated: two side by side bitmaps are checked against a cheap
+ * lower bound first, so the exact capacity functions are only asked about
+ * sizes they can represent.
+ */
 static int
 s_workspace_init(s_workspace_t *workspace, const s_source_t *source,
-    const bp_job_t *job, int *too_large)
+    const bp_job_t *job, const bp_sheet_limits_t *limits, int *too_large)
 {
     uint32_t index;
     size_t words;
+    uint64_t side;
 
+    BP_REQUIRE(limits);
     memset(workspace, 0, sizeof *workspace);
     workspace->side_cells = s_scratch_side_cells(source, job, too_large);
     if (*too_large)
         return 1;
+    side = workspace->side_cells;
+    if (side * side / 8U * 2U > limits->max_buffer_bytes) {
+        *too_large = 1;
+        return 1;
+    }
 
     for (index = 0U; index < source->spec_count; ++index) {
         if (source->specs[index].point_count > workspace->rotated_capacity)
@@ -437,6 +438,11 @@ s_workspace_init(s_workspace_t *workspace, const s_source_t *source,
         workspace->side_cells);
     workspace->dilate_capacity = bp_raster_dilate_scratch_words(
         job->clearance_cells, workspace->side_cells);
+    if (((uint64_t) words * 2U + workspace->dilate_capacity)
+        * sizeof (uint64_t) > limits->max_buffer_bytes) {
+        *too_large = 1;
+        return 1;
+    }
 
     workspace->solid_words = calloc(words, sizeof *workspace->solid_words);
     workspace->grown_words = calloc(words, sizeof *workspace->grown_words);
@@ -671,11 +677,51 @@ s_source_free(s_source_t *source)
     memset(source, 0, sizeof *source);
 }
 
-/* Reads a job file and builds everything a solve needs. */
+/*
+ * Limits that only keep the size arithmetic representable: the per-axis bound
+ * the loader has always enforced, and no product guardrail. This is what
+ * keeps bp_job_load's behaviour for the benchmark's resolution sweeps.
+ */
+static bp_sheet_limits_t
+s_legacy_limits(void)
+{
+    const uint32_t axis = 100000000U;
+    uint64_t total = UINT64_MAX / 32U;
+
+    if (total > (uint64_t) SIZE_MAX - axis)
+        total = (uint64_t) SIZE_MAX - axis;
+    return (bp_sheet_limits_t) {
+        .max_cells_per_axis = axis,
+        .max_total_cells = total,
+        .max_buffer_bytes = UINT64_MAX
+    };
+}
+
+/* Reports whether an optional override is absent or positive and finite. */
+static int
+s_override_valid(double value_mm)
+{
+    return value_mm == 0.0 || (isfinite(value_mm) && value_mm > 0.0);
+}
+
+/* Reads a job file with the cell size override the benchmark sweeps. */
 bp_job_load_result_t
 bp_job_load(const char *path, double cell_size_override_mm)
 {
-    bp_job_load_result_t result = { BP_JOB_OK, 0U, NULL };
+    BP_REQUIRE(path);
+    BP_REQUIRE(cell_size_override_mm >= 0.0);
+    return bp_job_load_with((bp_job_load_args_t) {
+        .path = path,
+        .cell_size_mm = cell_size_override_mm,
+        .limits = s_legacy_limits()
+    });
+}
+
+/* Reads a job file, applies the overrides and builds what a solve needs. */
+bp_job_load_result_t
+bp_job_load_with(bp_job_load_args_t args)
+{
+    bp_job_load_result_t result = { BP_JOB_OK, 0U, NULL, { BP_SHEET_OK } };
     s_source_t source;
     s_build_t build;
     s_workspace_t workspace;
@@ -687,11 +733,26 @@ bp_job_load(const char *path, double cell_size_override_mm)
     uint32_t orientation_bound = 0U;
     uint32_t instances = 0U;
 
-    BP_REQUIRE(path);
-    BP_REQUIRE(cell_size_override_mm >= 0.0);
+    BP_REQUIRE(args.path);
+    if (args.limits.max_cells_per_axis == 0U
+        && args.limits.max_total_cells == 0U
+        && args.limits.max_buffer_bytes == 0U)
+        args.limits = bp_sheet_default_limits();
+    BP_REQUIRE(args.limits.max_cells_per_axis > 0U);
+    BP_REQUIRE(args.limits.max_total_cells > 0U);
+    BP_REQUIRE(args.limits.max_buffer_bytes > 0U);
     memset(&source, 0, sizeof source);
     memset(&build, 0, sizeof build);
     memset(&workspace, 0, sizeof workspace);
+
+    /* A half-given sheet override is as invalid as a negative one. */
+    if (!s_override_valid(args.sheet_width_mm)
+        || !s_override_valid(args.sheet_height_mm)
+        || (args.sheet_width_mm == 0.0) != (args.sheet_height_mm == 0.0)
+        || !s_override_valid(args.cell_size_mm)) {
+        result.status = BP_JOB_BAD_OVERRIDE;
+        return result;
+    }
 
     job = calloc(1U, sizeof *job);
     if (!job) {
@@ -699,24 +760,46 @@ bp_job_load(const char *path, double cell_size_override_mm)
         return result;
     }
 
-    result.status = s_parse(path, cell_size_override_mm, job, &source,
-        &result.line_number);
+    result.status = s_parse(args.path, job, &source, &result.line_number);
     if (result.status != BP_JOB_OK)
         goto failed;
     result.line_number = 0U;
 
-    job->clearance_cells = s_cells_up(job->clearance_mm, job->cell_size_mm,
-        &too_large);
-    job->sheet_width_cells = s_cells_down(job->sheet_width_mm,
-        job->cell_size_mm, &too_large);
-    job->sheet_height_cells = s_cells_down(job->sheet_height_mm,
-        job->cell_size_mm, &too_large);
-    if (too_large) {
+    job->file_sheet_width_mm = job->sheet_width_mm;
+    job->file_sheet_height_mm = job->sheet_height_mm;
+    job->file_cell_size_mm = job->cell_size_mm;
+    /* Overrides win over the file, and nothing sized by the sheet exists yet. */
+    if (args.sheet_width_mm > 0.0) {
+        job->sheet_width_mm = args.sheet_width_mm;
+        job->sheet_height_mm = args.sheet_height_mm;
+    }
+    if (args.cell_size_mm > 0.0)
+        job->cell_size_mm = args.cell_size_mm;
+
+    result.sheet_plan = bp_sheet_plan((bp_sheet_plan_args_t) {
+        .width_mm = job->sheet_width_mm,
+        .height_mm = job->sheet_height_mm,
+        .cell_size_mm = job->cell_size_mm,
+        .limits = args.limits
+    });
+    /* The parser and the override check have ruled out bad numbers. */
+    BP_REQUIRE(result.sheet_plan.status != BP_SHEET_BAD_SIZE);
+    BP_REQUIRE(result.sheet_plan.status != BP_SHEET_BAD_CELL_SIZE);
+    if (result.sheet_plan.status == BP_SHEET_TOO_SMALL) {
+        result.status = BP_JOB_SHEET_TOO_SMALL;
+        goto failed;
+    }
+    if (result.sheet_plan.status != BP_SHEET_OK) {
         result.status = BP_JOB_TOO_LARGE;
         goto failed;
     }
-    if (job->sheet_width_cells == 0U || job->sheet_height_cells == 0U) {
-        result.status = BP_JOB_SHEET_TOO_SMALL;
+    job->sheet_width_cells = result.sheet_plan.width_cells;
+    job->sheet_height_cells = result.sheet_plan.height_cells;
+
+    job->clearance_cells = s_cells_up(job->clearance_mm, job->cell_size_mm,
+        &too_large);
+    if (too_large) {
+        result.status = BP_JOB_TOO_LARGE;
         goto failed;
     }
 
@@ -727,7 +810,8 @@ bp_job_load(const char *path, double cell_size_override_mm)
     }
     job->part_count = instances;
 
-    if (!s_workspace_init(&workspace, &source, job, &too_large)) {
+    if (!s_workspace_init(&workspace, &source, job, &args.limits,
+        &too_large)) {
         result.status = BP_JOB_OUT_OF_MEMORY;
         goto failed;
     }

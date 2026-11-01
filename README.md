@@ -2,19 +2,32 @@
 
 *[Deze pagina in het Nederlands](README.nl.md)*
 
-Given a set of shapes and a rectangular plate, this decides where to cut each
-part so that as little material as possible is wasted. Arbitrary simple
-polygons, holes, quarter turns, and a guaranteed gap between parts. The solver
-is deterministic C11 with no allocation in the hot path; Python does the
-tooling and a separate program does the viewer.
+Given a set of shapes and a plate size, this decides where to cut each
+part across one or more identical plates, aiming to waste as little material
+as possible. Arbitrary simple polygons, holes, quarter turns, and a guaranteed
+gap between parts. The solver is deterministic C11 with no allocation in the
+hot path; Python does the tooling and a separate program does the viewer.
 
-![the viewer](docs/gui_screenshot.png)
+**New: pick the plate.** Every standard plate size is a preset, any
+rectangular plate or remnant can be typed in, and the job file stays as it is.
+That makes this usable in real production planning: nest the same job for the
+laser bed, the router table or the saw's stock, and see straight away what it
+costs in plates. [Plate sizes](#plate-sizes) ·
+[Use in production planning](#use-in-production-planning).
+
+**Also new: multi-plate jobs, a smaller final bounding box, and a viewer for every
+plate.** [See the illustrated update](docs/update_multisheet_en.md), including
+a complete 76-part job on two plates and a before/after of the final plate.
+
+![76 parts on two plates: 43 on the first, 33 on the second, with their solid bounding boxes highlighted.](docs/multisheet_overview_en.png)
 
 It is free to use and to learn from. It is also a worked example of how I
 approach optimisation problems, which is the other reason it is here — see
 [when a good algorithm is not the answer](#when-a-good-algorithm-is-not-the-answer).
 
-**Contents** — [Quick start](#quick-start) · [How it works](#how-it-works) ·
+**Contents** — [Quick start](#quick-start) ·
+[Multiple plates](#multiple-plates-and-the-last-bounding-box) · [Plate sizes](#plate-sizes) ·
+[How it works](#how-it-works) ·
 [Job format](#the-job-format) · [Viewer](#the-viewer) · [Build](#build) ·
 [What the measurements changed](#what-the-measurements-changed) ·
 [When an algorithm is not the answer](#when-a-good-algorithm-is-not-the-answer) ·
@@ -59,6 +72,160 @@ To search rather than make a single pass, give it a budget:
 
 On `jobs/demo.job`, five seconds takes the used height from 1134 mm down to
 1035 mm — 99 mm more of the plate left as one clean, re-usable strip.
+
+### Multiple plates and the last bounding box
+
+Give the solver a limit on the number of identical plates:
+
+```sh
+pixi run build
+./build/bp_pack --sheets 4 --time 5 --svg build/multi.svg jobs/dense.job
+```
+
+The objective is lexicographic: first place as many requested pieces as
+possible, then use fewer plates, then minimise **width times height** of the
+tight bounding box on the last plate. Width and height describe the solid
+geometry, excluding the clearance margin. A taller but narrower final layout
+can therefore win; this differs from the single-plate height objective.
+
+Overflow carries to the next plate. Search changes the part order, which also
+changes assignments between plates, and tries narrower containers for the
+last plate. This first multi-plate heuristic uses bottom-left construction;
+the single-plate overlap-minimisation phase is not part of this mode. It
+retains the best result found and does not prove a minimum number of plates
+or a globally minimum box. `--sort` and `--mode` control construction;
+`--contact`, `--window`, `--ruin`, `--blink` and `--compact` are single-plate
+options and are rejected in multi-plate mode.
+
+`--time` is a soft CPU-time budget, checked between complete candidates.
+For repeatable comparisons, use a fixed round count instead:
+
+```sh
+./build/bp_pack --sheets 2 --search 128 --svg build/overflow.svg jobs/multisheet.job
+```
+
+With no `--search` or `--time`, multi-plate mode returns the construction
+baseline. The small example deliberately fills plate 1 and spills two parts
+onto plate 2, so it isolates the bounding-box objective.
+
+![The same two parts on plate 2 before and after search. The bounding box changes from 101 x 60 to 60 x 91 mm.](docs/multisheet_comparison_en.png)
+
+In this controlled example, 128 rounds reduce the bounding-box area from
+6060 to 5460 mm2: **9.9% smaller**, with the same parts, two plates and 1 mm
+clearance. The part material area is unchanged; the remaining space has a
+different shape. [Read why that matters](docs/update_multisheet_en.md).
+
+The SVG files are `build/overflow-001.svg`, `build/overflow-002.svg`, and so
+on, one file per used plate. `--csv` produces one row per used plate, including
+box origin, dimensions, area and utilisation. Exit status is 0 when all parts
+were placed, 2 for a valid partial result (plate limit or oversized parts),
+and 1 for an input/output failure. Unplaced pieces are identified on stderr.
+Only used plates are written; files from an earlier run with more plates
+should not be counted as part of the new result.
+
+### Plate sizes
+
+The plate size comes from the job's `sheet` line. To nest the same job on
+another rectangular plate without editing the file, override it:
+
+```sh
+./build/bp_pack --sheet-size 800 600 --svg build/laser.svg jobs/demo.job
+./build/bp_pack --sheet-size 1250 2500 --cell 0.5 --svg build/large.svg jobs/demo.job
+```
+
+Width and height are taken as given and never swapped; `--sheet-size 600 800`
+is the same plate turned. A rectangular remnant is just another size. The job
+file is never modified. With `--sheets`, every plate in the run has the
+overridden size. Parts that do not fit the smaller plate are reported as
+unplaced (exit status 2), not shrunk or dropped. The sheet rounds down to
+whole cells, so a 730.5 mm remnant at 1 mm cells is modelled, and exported,
+as 730 mm: never larger than the real plate.
+
+Cell size matters more than millimetres: halving the cell quadruples the cell
+count, and next to the bitboard the loader keeps a 4-byte count and an 8-byte
+running total per cell for the search. `bp_pack` and the viewer therefore
+refuse a raster above a published budget before allocating anything:
+
+- at most 8192 cells along either axis,
+- at most 16 000 000 cells in total,
+- at most 256 MiB of sheet buffers.
+
+These are product guardrails, not measured hardware limits, and they do not
+bound total process memory. What they mean for the common sizes:
+
+| plate mm | cell mm | raster cells | sheet buffers MiB | |
+| --- | ---: | ---: | ---: | --- |
+| 800 x 600 | 1.0 | 480 000 | 5.56 | ok |
+| 800 x 600 | 0.25 | 7 680 000 | 88.83 | ok |
+| 1250 x 2500 | 1.0 | 3 125 000 | 36.16 | ok |
+| 1250 x 2500 | 0.5 | 12 500 000 | 144.62 | ok |
+| 1250 x 2500 | 0.25 | 50 000 000 | 578.31 | refused |
+
+A refused size says why and suggests the finest cell size that fits. It never
+changes the size or the resolution by itself:
+
+```text
+bp_pack: jobs/demo.job: job is too large for the chosen cell size:
+1250 x 2500 mm at 0.25 mm is 5000 x 10000 cells, more than 8192 along an
+axis; try 0.5 mm cells
+```
+
+`pixi run benchmark` keeps the old loader without these limits, so its
+resolution sweep still runs to 0.25 mm on a 1200 mm plate.
+
+### Use in production planning
+
+With the plate size free, a planner can do what the shop floor actually needs:
+
+- **Laser, plasma and waterjet.** Nest on the machine bed, for instance
+  800 x 600 mm, and get one SVG per plate with the gap between parts
+  guaranteed. Parts that do not fit are listed, not dropped.
+- **CNC routing (frezen).** Full sheets such as 1250 x 2500 mm, with the
+  clearance set to the cutter diameter so every part keeps its tool path.
+- **Remnants.** Type the rectangle that is left on the rack and nest the next
+  job onto it before cutting into a new sheet.
+- **Comparing stock.** Run the same job on 1250 x 2500 and on 1200 x 1200 and
+  compare plates used and the size of the last plate's bounding box, before
+  ordering material.
+
+Every run is repeatable: the same job, size and `--search` round count give
+the same layout, and the CLI's exit status and CSV output fit a planning
+script.
+
+**Sawing.** Choosing the plate already helps here: the saw's stock sizes are
+presets and remnants can be typed in. The layouts themselves are free-form
+nesting, though, and a panel or beam saw can only make straight cuts that run
+from edge to edge. Do not send these layouts to a saw yet. **Guillotine
+cutting is next**: layouts built only from continuous saw lines, so that a
+panel saw can cut them in stages.
+
+Know the current limits: one plate size per run (all plates in a multi-plate
+run are identical), rectangular plates only, and positions on a raster with
+conservative rounding: parts are never modelled smaller and plates never
+larger than they are, at the cost of up to one cell of space per edge.
+
+Measured with `python3 tools/measure_sheet_sizes.py --gui` on `jobs/demo.job`
+(x86-64, WSL2; median CPU time and largest peak resident memory of three
+runs, 40 fixed search rounds):
+
+| plate mm | cell mm | sheet buffers MiB | construction CPU s | search CPU s | search peak MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 800 x 600 | 1.0 | 5.56 | 0.020 | 3.17 | 14.2 |
+| 800 x 600 | 0.5 | 22.21 | 0.070 | 11.50 | 24.8 |
+| 1250 x 2500 | 1.0 | 36.16 | 0.023 | 7.83 | 38.7 |
+| 1250 x 2500 | 0.5 | 144.62 | 0.081 | 38.78 | 147.2 |
+
+A construction pass stays at 14.2 MiB on every size, because it never writes
+the search buffers and unwritten pages are not resident. Once the search
+writes them, the peak follows the budget figure closely. The budget bounds
+memory, not time: the same 40 rounds cost twelve times as much CPU on the
+large plate at 0.5 mm as on the laser plate at 1 mm.
+
+In the viewer, Apply & Pack builds the new job before releasing the old one,
+so both exist for a moment. Going from 1250 x 2500 to 800 x 600 mm at 0.5 mm
+that added 100 MiB to the peak (237 MiB against 137 MiB when started on
+800 x 600 directly); going the other way it added nothing measurable. In both
+directions the peak stayed below a run started directly on the larger plate.
 
 ## How it works
 
@@ -140,11 +307,113 @@ Drag to pan, wheel to zoom, and drag the step slider to replay the placement
 order — the fastest way to watch a heuristic make a bad decision. The controls
 re-pack without restarting.
 
+### Multiple plates in the viewer
+
+![The multi-plate viewer with dense.job plate 2 selected, per-plate statistics and a yellow bounding box.](docs/gui_multisheet.png)
+
+```sh
+./build/bp_gui jobs/multisheet.job --sheets 2 --search 128
+```
+
+Or choose **multiple plates**, set **max plates**, and press **Pack**. Enable
+**optimise** with either a CPU-time budget or **fixed rounds**. The latter
+uses the same seed and round count as the CLI for repeatable comparisons.
+The single-plate blink/ruin/squeeze controls appear only in single-plate mode.
+Solving runs synchronously; the window waits for the current solve to finish.
+
+Click a row in the plate table to select it. Each row shows its part count,
+utilisation and tight solid bounding box in millimetres. The selected plate
+fills the canvas; the yellow contour marks its final bounding box, excluding
+clearance. The last plate is marked with `*`. Above the canvas are the box's
+origin, dimensions and W * H. The **local step** slider replays only that
+plate's final placement order, not the optimisation history. The yellow box
+and reported scores still describe the full result.
+
+Global utilisation counts the area of all used plates. Partial results remain
+viewable, with an expandable list of unplaced piece instances and job labels.
+Pending control edits do not change the published result's mode, score or
+export naming until **Pack** is pressed. A failed job reload retains the
+previous job and packing; **Loaded** identifies the job currently displayed.
+
+### Plate sizes in the viewer
+
+![The viewer with the 800 x 600 mm laser preset selected, its raster and buffer size, and demo.job packed on it.](docs/gui_sheet_size.png)
+
+```sh
+./build/bp_gui jobs/demo.job --sheet-size 800 600
+```
+
+Under **geometry**, **plate** starts at *from job file*, so a job keeps its own
+size. The presets are 500 x 500, 600 x 600, 600 x 300, 800 x 600 (laser),
+1200 x 1200 and 1250 x 2500 mm. A preset fills the width and height fields;
+typing in them chooses *custom*, and **Swap W/H** is the only thing that turns
+a plate. **cell from job** follows the file's `cell` line; untick it to type a
+resolution. Below the fields the raster and the sheet buffers are shown as you
+type, or in red the reason the size would be refused and the cell size to
+try instead. That preview runs the loader's own check, so what it accepts,
+the loader accepts.
+
+A changed size or cell is not applied while you type. **Pack** becomes
+**Apply & Pack**, and a yellow line says which size the shown result still
+has. Its counts, boxes and SVG export keep describing that result. Apply &
+Pack rebuilds the job in force with the new geometry and packs it, starting
+again at plate 1 with the view fitted. If the size is refused, or the packing
+controls are invalid, nothing is replaced: the previous result stays on
+screen and exportable. **Load** and `Ctrl+R` also use the geometry controls.
+
+`--sheet-size <w_mm> <h_mm>` and `--cell <mm>` set the controls from the
+command line. `--sheet` keeps its meaning of selecting a result plate, and
+`--sheets` stays the plate limit. For scripted checks, `--apply-sheet-size
+<w_mm> <h_mm>` changes the size after the first packing and presses Apply &
+Pack, as a user would; a refusal is printed on stderr and the run continues.
+
+**Save SVG** / `Ctrl+S` exports every full plate, regardless of the selection
+or slider. Multi-plate mode uses the CLI's `<stem>-001.svg`, `-002.svg`, etc.;
+single-plate mode uses the filename verbatim. The dialog starts with `nest.svg`
+and shows the current working directory. Relative filenames are saved there,
+so launching from `build/` does not add a second `build/` prefix. You can enter
+an absolute output path; its parent folder must already exist.
+
+**Save and quit** first opens this same filename dialog. Cancel returns to the
+viewer; a failed write keeps the dialog open for correction and retry. Quitting
+completes only after all files close successfully. Partial files remain on an
+export failure, with the completed count, filename and operating-system error
+shown in the dialog.
+
+For scripted rendering, `--sheet` is a 1-based selection and `--step` is a
+plate-local visible count; `--svg` exports the initial full result:
+
+```sh
+./build/bp_gui jobs/multisheet.job --sheets 2 --search 128 --sheet 2 \
+    --svg build/gui.svg --shot build/plate2.ppm --frames 8
+python3 tools/check_gui.py
+```
+
+The checker requires a working display. It uses only the Python standard
+library, renders both plates and a hidden replay, verifies their actual pixel
+colours and the bounding-box aspect ratio, checks exported identities and
+clearance, and exercises empty/partial results and failure exits. PNG previews
+and SVGs are written to `build/gui-check/`.
+
+`python3 tools/check_gui_sheet_size.py` checks plate sizes in the real window:
+the job's own size, the laser preset in both orientations, 1250 x 2500 mm at
+1 and 0.5 mm, and a typed remnant. For each it requires the drawn sheet's
+aspect ratio and the SVG's size to match, and rechecks the layout. It then
+checks Apply & Pack, that refused sizes keep the previous result, and that
+the plate selection starts again at plate 1 when the new size needs fewer
+plates. Output goes to `build/gui-sheet-size/`.
+
+`python3 tools/check_gui_save.py` additionally exercises the interactive
+Quit -> Save and quit -> filename -> Save flow, including Cancel and retry
+after an invalid path. It requires X11/XWayland and the X11/XTest libraries;
+the test starts viewers in isolated directories under `build/` and drives
+their keyboard controls, rather than using the `--svg` export shortcut.
+
 | | |
 | --- | --- |
 | `Ctrl+O` | open a job, with a small browser that lists `.job` files |
-| `Ctrl+R` | reload, picking up an edited file or a new cell size |
-| `F5` | pack again |
+| `Ctrl+R` | reload, picking up an edited file and the geometry controls |
+| `F5` | pack again, applying a pending plate or cell size first |
 | `Ctrl+S` | write the layout as SVG |
 | `Ctrl+Q` | quit |
 

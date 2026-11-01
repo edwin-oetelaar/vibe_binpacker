@@ -2,21 +2,35 @@
 
 *[This page in English](README.md)*
 
-Je geeft het een set onderdelen en een rechthoekige plaat, en het bepaalt waar
-elk onderdeel gesneden moet worden zodat er zo min mogelijk materiaal verloren
-gaat. Willekeurige polygonen, gaten, kwartslagen, en een gegarandeerde
-tussenruimte tussen de onderdelen. De solver is deterministische C11 die
-tijdens het rekenen niets alloceert; het gereedschap eromheen is Python en de
-viewer is een apart programma.
+Je geeft het een set onderdelen en een plaatmaat, en het verdeelt de onderdelen
+over een of meer identieke platen, met zo min mogelijk materiaalverlies.
+Willekeurige polygonen, gaten, kwartslagen, en een gegarandeerde tussenruimte
+tussen de onderdelen. De solver is deterministische C11 die tijdens het rekenen
+niets alloceert; het gereedschap eromheen is Python en de viewer is een apart
+programma.
 
-![de viewer](docs/gui_screenshot.png)
+**Nieuw: kies de plaat.** Elk standaard plaatformaat is een preset, elke
+rechthoekige plaat of elk reststuk kun je zelf invullen, en het jobbestand
+blijft zoals het is. Daarmee is dit bruikbaar in een echte productieplanning:
+nest dezelfde opdracht voor het laserbed, de freestafel of de voorraad van de
+zaag, en zie meteen wat het aan platen kost. [Plaatformaten](#plaatformaten) ·
+[In de productieplanning](#in-de-productieplanning).
+
+**Ook nieuw: opdrachten over meerdere platen, een kleinere laatste bounding box
+en een viewer voor iedere plaat.** [Bekijk de update met beelden](docs/update_multisheet_nl.md):
+een complete opdracht met 76 onderdelen op twee platen en een voor/na van de
+laatste plaat.
+
+![76 onderdelen op twee platen: 43 op de eerste en 33 op de tweede, met de omsluitende rechthoeken geel gemarkeerd.](docs/multisheet_overview_nl.png)
 
 Vrij te gebruiken en van te leren. Het is tegelijk een uitgewerkt voorbeeld van
 hoe ik optimalisatievraagstukken aanpak, en dat is de tweede reden dat het hier
 staat — zie [wanneer een goed algoritme niet
 genoeg is](#wanneer-een-goed-algoritme-niet-genoeg-is).
 
-**Inhoud** — [Snel starten](#snel-starten) · [Hoe het werkt](#hoe-het-werkt) ·
+**Inhoud** — [Snel starten](#snel-starten) ·
+[Meerdere platen](#meerdere-platen-en-de-laatste-bounding-box) · [Plaatformaten](#plaatformaten) ·
+[Hoe het werkt](#hoe-het-werkt) ·
 [Jobformaat](#het-jobformaat) · [Viewer](#de-viewer) · [Bouwen](#bouwen) ·
 [Wat de metingen veranderden](#wat-de-metingen-veranderden) ·
 [Wanneer een algoritme niet genoeg is](#wanneer-een-goed-algoritme-niet-genoeg-is) ·
@@ -63,6 +77,164 @@ Wil je zoeken in plaats van één doorloop, geef het dan een tijdsbudget:
 Bij `jobs/demo.job` brengt vijf seconden de benutte hoogte terug van 1134 mm
 naar 1035 mm. Dat is 99 mm extra plaat die als één rechte, herbruikbare strook
 overblijft.
+
+### Meerdere platen en de laatste bounding box
+
+Geef een maximumaantal identieke platen op:
+
+```sh
+pixi run build
+./build/bp_pack --sheets 4 --time 5 --svg build/multi.svg jobs/dense.job
+```
+
+De doelen hebben een vaste volgorde: zoveel mogelijk gevraagde onderdelen
+plaatsen, daarna zo weinig mogelijk platen gebruiken, en daarna **breedte
+maal hoogte** van de omsluitende rechthoek op de laatste plaat verkleinen.
+Die rechthoek omvat de echte geometrie, zonder de tussenruimte of randmarge.
+Een hogere maar smallere indeling kan dus beter zijn dan een lage, brede.
+
+Wat niet past schuift door naar de volgende plaat. De zoeklaag probeert
+andere onderdeelvolgordes, en daarmee andere verdelingen over de platen,
+en smallere containers voor de laatste plaat. Deze eerste multi-plaatheuristiek
+gebruikt bottom-left-constructie en bewaart de beste gevonden oplossing;
+een bewezen minimum levert hij niet. `--sort` en `--mode` sturen de
+constructie. `--contact`, `--window`, `--ruin`, `--blink` en `--compact`
+horen bij de zoeklaag voor een enkele plaat en worden hier geweigerd.
+
+`--time` is een zacht CPU-tijdsbudget, gecontroleerd tussen volledige
+kandidaten. Gebruik een vast aantal rondes voor herhaalbare vergelijkingen:
+
+```sh
+./build/bp_pack --sheets 2 --search 128 --svg build/overflow.svg jobs/multisheet.job
+```
+
+Zonder `--search` of `--time` krijg je de constructieve beginoplossing.
+De kleine voorbeeldjob vult plaat 1 en laat twee onderdelen naar plaat 2
+doorschuiven.
+
+![Dezelfde twee onderdelen op plaat 2 voor en na zoeken. De bounding box verandert van 101 x 60 naar 60 x 91 mm.](docs/multisheet_comparison_nl.png)
+
+In dit controlevoorbeeld verkleinen 128 zoekrondes de bounding box van 6060
+naar 5460 mm2: **9,9% kleiner**, met dezelfde onderdelen, twee platen en 1 mm
+tussenruimte. De materiaaloppervlakte blijft gelijk; de vorm van de resterende
+ruimte verandert. [Lees waarom dat waardevol is](docs/update_multisheet_nl.md).
+
+De uitvoer bestaat uit `build/overflow-001.svg`,
+`build/overflow-002.svg`, enzovoort: een bestand per gebruikte plaat.
+`--csv` schrijft per plaat de oorsprong, breedte, hoogte en oppervlakte van
+de bounding box en de benuttingsgraad. Exitcode 0 betekent alles geplaatst,
+2 een geldige gedeeltelijke oplossing en 1 een invoer- of uitvoerfout.
+Niet-geplaatste onderdelen worden op stderr vermeld. Oude SVG-bestanden
+van een eerdere run met meer platen behoren niet tot het nieuwe resultaat.
+
+### Plaatformaten
+
+Het plaatformaat komt uit de `sheet`-regel van de job. Om dezelfde job op een
+andere rechthoekige plaat te nesten zonder het bestand aan te passen, geef je
+een override:
+
+```sh
+./build/bp_pack --sheet-size 800 600 --svg build/laser.svg jobs/demo.job
+./build/bp_pack --sheet-size 1250 2500 --cell 0.5 --svg build/large.svg jobs/demo.job
+```
+
+Breedte en hoogte worden genomen zoals ze gegeven zijn en nooit verwisseld;
+`--sheet-size 600 800` is dezelfde plaat gedraaid. Een rechthoekig reststuk
+is gewoon een andere maat. Het jobbestand wordt nooit gewijzigd. Met
+`--sheets` hebben alle platen in de run het opgegeven formaat. Onderdelen die
+niet op de kleinere plaat passen worden als niet-geplaatst gemeld (exitcode
+2), niet verkleind of weggelaten. De plaat wordt naar beneden afgerond op hele
+cellen: een reststuk van 730,5 mm wordt bij 1 mm cellen als 730 mm gemodelleerd
+en geexporteerd, nooit groter dan de echte plaat.
+
+De celgrootte weegt zwaarder dan de millimeters: halveer je de cel, dan
+verviervoudigt het aantal cellen, en naast de bitboard houdt de loader per
+cel een telling van 4 bytes en een lopend totaal van 8 bytes bij voor de
+zoeklaag. `bp_pack` en de viewer weigeren daarom een raster boven een vast
+budget, nog voordat er iets wordt gealloceerd:
+
+- hoogstens 8192 cellen langs een as,
+- hoogstens 16.000.000 cellen in totaal,
+- hoogstens 256 MiB aan plaatbuffers.
+
+Dat zijn productgrenzen, geen gemeten hardwaremaximum, en ze begrenzen niet
+het totale procesgeheugen. Wat ze betekenen voor de gangbare maten:
+
+| plaat in mm | cel in mm | rastercellen | plaatbuffers in MiB | |
+| --- | ---: | ---: | ---: | --- |
+| 800 x 600 | 1,0 | 480.000 | 5,56 | ok |
+| 800 x 600 | 0,25 | 7.680.000 | 88,83 | ok |
+| 1250 x 2500 | 1,0 | 3.125.000 | 36,16 | ok |
+| 1250 x 2500 | 0,5 | 12.500.000 | 144,62 | ok |
+| 1250 x 2500 | 0,25 | 50.000.000 | 578,31 | geweigerd |
+
+Een geweigerde maat zegt waarom en stelt de fijnste celgrootte voor die wel
+past. Maat of resolutie worden nooit vanzelf aangepast:
+
+```text
+bp_pack: jobs/demo.job: job is too large for the chosen cell size:
+1250 x 2500 mm at 0.25 mm is 5000 x 10000 cells, more than 8192 along an
+axis; try 0.5 mm cells
+```
+
+`pixi run benchmark` gebruikt de oude loader zonder deze grenzen, zodat de
+resolutiesweep nog steeds tot 0,25 mm op een plaat van 1200 mm loopt.
+
+### In de productieplanning
+
+Nu het plaatformaat vrij is, kan een planner doen wat de werkvloer nodig heeft:
+
+- **Laseren, plasmasnijden en waterstralen.** Nest op het machinebed,
+  bijvoorbeeld 800 x 600 mm, en krijg per plaat een SVG met gegarandeerde
+  tussenruimte. Onderdelen die niet passen worden gemeld, niet weggelaten.
+- **Frezen.** Volle platen zoals 1250 x 2500 mm, met de tussenruimte op de
+  freesdiameter, zodat elk onderdeel zijn freesbaan houdt.
+- **Reststukken.** Vul de rechthoek in die nog in het rek staat en nest de
+  volgende opdracht daarop, voordat je een nieuwe plaat aansnijdt.
+- **Voorraad vergelijken.** Draai dezelfde opdracht op 1250 x 2500 en op
+  1200 x 1200 en vergelijk het aantal platen en de grootte van de bounding box
+  op de laatste plaat, voordat je materiaal bestelt.
+
+Elke run is herhaalbaar: dezelfde job, maat en `--search`-rondes geven
+hetzelfde legplan, en de exitcode en CSV-uitvoer van de CLI passen in een
+planningsscript.
+
+**Zagen.** Het kiezen van de plaat helpt hier al: de voorraadmaten van de zaag
+zijn presets en reststukken vul je zelf in. De legplannen zelf zijn echter
+vrije nesting, en een plaat- of balkzaag kan alleen rechte sneden maken die van
+rand tot rand lopen. Stuur deze legplannen dus nog niet naar een zaag.
+**Guillotineversnijding komt hierna**: legplannen die alleen uit doorlopende
+zaaglijnen bestaan, zodat een plaatzaag ze in stappen kan zagen.
+
+Ken de huidige grenzen: een plaatformaat per run (alle platen in een
+multi-plaatrun zijn gelijk), alleen rechthoekige platen, en posities op een
+raster met conservatieve afronding: onderdelen worden nooit kleiner en platen
+nooit groter gemodelleerd dan ze zijn, ten koste van hooguit een cel ruimte per
+rand.
+
+Gemeten met `python3 tools/measure_sheet_sizes.py --gui` op `jobs/demo.job`
+(x86-64, WSL2; mediaan van de CPU-tijd en grootste piek van het residente
+geheugen over drie runs, 40 vaste zoekrondes):
+
+| plaat in mm | cel in mm | plaatbuffers in MiB | constructie CPU s | zoeken CPU s | piek zoeken in MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 800 x 600 | 1,0 | 5,56 | 0,020 | 3,17 | 14,2 |
+| 800 x 600 | 0,5 | 22,21 | 0,070 | 11,50 | 24,8 |
+| 1250 x 2500 | 1,0 | 36,16 | 0,023 | 7,83 | 38,7 |
+| 1250 x 2500 | 0,5 | 144,62 | 0,081 | 38,78 | 147,2 |
+
+Een constructieve run blijft op elke maat op 14,2 MiB, omdat hij de
+zoekbuffers niet beschrijft en onbeschreven pagina's niet resident zijn.
+Zodra het zoeken ze beschrijft, volgt de piek het budgetgetal op de voet.
+Het budget begrenst geheugen, geen tijd: dezelfde 40 rondes kosten op de grote
+plaat bij 0,5 mm twaalf keer zoveel CPU als op de laserplaat bij 1 mm.
+
+In de viewer bouwt Apply & Pack de nieuwe job op voordat de oude wordt
+vrijgegeven, zodat ze even naast elkaar bestaan. Van 1250 x 2500 naar
+800 x 600 mm bij 0,5 mm voegde dat 100 MiB aan de piek toe (237 MiB tegen
+137 MiB bij direct starten op 800 x 600); andersom was er geen meetbaar
+verschil. In beide richtingen bleef de piek onder die van een run die direct
+op de grootste plaat start.
 
 ## Hoe het werkt
 
@@ -155,11 +327,120 @@ volgorde van plaatsen terug. Dat is de snelste manier om een heuristiek een
 verkeerde beslissing te zien nemen. De instellingen nesten opnieuw zonder dat
 je het programma hoeft te herstarten.
 
+### Meerdere platen in de viewer
+
+![De multi-plaatviewer met plaat 2 van dense.job geselecteerd, statistieken per plaat en een gele bounding box.](docs/gui_multisheet.png)
+
+```sh
+./build/bp_gui jobs/multisheet.job --sheets 2 --search 128
+```
+
+Of kies **multiple plates**, stel **max plates** in en druk op **Pack**.
+Met **optimise** zoek je binnen een CPU-tijdsbudget of een vast aantal
+**fixed rounds**. Vaste rondes gebruiken dezelfde seed als de CLI en maken
+vergelijkingen herhaalbaar. De blink-, ruin- en squeeze-instellingen verschijnen
+alleen bij de zoeklaag voor een enkele plaat. Tijdens het berekenen wacht het
+venster op de solver.
+
+Klik op een rij in de plaatlijst om die plaat te bekijken. De lijst toont
+aantallen, benutting en de echte bounding box in millimeters. De gele contour
+markeert de volledige bounding box zonder tussenruimte; de laatste plaat
+heeft een `*`. Boven het tekenvlak staan oorsprong, afmetingen en W * H.
+De schuif **local step** speelt alleen de uiteindelijke plaatsingsvolgorde
+van die plaat af, niet het verloop van de optimalisatie. Contour en score
+blijven bij het volledige eindresultaat horen.
+
+De totale benutting telt alle gebruikte platen mee. Gedeeltelijke resultaten
+blijven zichtbaar, met een uitklapbare lijst van ontbrekende onderdelen en hun
+joblabels. Instellingen die je wijzigt gelden pas na **Pack** voor het resultaat.
+Bij een mislukte reload blijft de vorige job met zijn indeling behouden;
+**Loaded** geeft aan welk bestand werkelijk getoond wordt.
+
+### Plaatformaten in de viewer
+
+![De viewer met het lasermaatpreset 800 x 600 mm geselecteerd, het raster en de buffergrootte, en demo.job daarop genest.](docs/gui_sheet_size.png)
+
+```sh
+./build/bp_gui jobs/demo.job --sheet-size 800 600
+```
+
+Onder **geometry** begint **plate** op *from job file*, zodat een job zijn
+eigen maat houdt. De presets zijn 500 x 500, 600 x 600, 600 x 300,
+800 x 600 (laser), 1200 x 1200 en 1250 x 2500 mm. Een preset vult de velden
+voor breedte en hoogte; zelf typen kiest *custom*, en alleen **Swap W/H**
+draait een plaat. **cell from job** volgt de `cell`-regel van het bestand;
+vink het uit om zelf een resolutie in te vullen. Onder de velden staan
+tijdens het typen het raster en de plaatbuffers, of in rood waarom de maat
+geweigerd zou worden en welke celgrootte je kunt proberen. Die voorvertoning
+gebruikt de controle van de loader zelf: wat zij accepteert, accepteert de
+loader ook.
+
+Een gewijzigde maat of cel wordt niet toegepast terwijl je typt. **Pack** wordt
+**Apply & Pack**, en een gele regel zegt welke maat het getoonde resultaat nog
+heeft. Aantallen, bounding boxes en de SVG-export blijven bij dat resultaat
+horen. Apply & Pack bouwt de geladen job opnieuw op met de nieuwe geometrie en
+nest hem, weer vanaf plaat 1 en met de weergave passend gemaakt. Wordt de maat
+geweigerd, of zijn de nestinstellingen ongeldig, dan wordt er niets vervangen:
+het vorige resultaat blijft zichtbaar en exporteerbaar. Ook **Load** en
+`Ctrl+R` gebruiken de geometrie-instellingen.
+
+`--sheet-size <b_mm> <h_mm>` en `--cell <mm>` zetten de instellingen vanaf de
+opdrachtregel. `--sheet` blijft een resultaatplaat selecteren en `--sheets`
+blijft het maximumaantal platen. Voor controlescripts verandert
+`--apply-sheet-size <b_mm> <h_mm>` de maat na het eerste nesten en drukt op
+Apply & Pack, zoals een gebruiker dat doet; een weigering komt op stderr en de
+run gaat door.
+
+**Save SVG** / `Ctrl+S` exporteert alle volledige platen, onafhankelijk van de
+selectie en de stappenschuif. Meerdere platen krijgen dezelfde nummering als
+in de CLI: `<naam>-001.svg`, `-002.svg`, enzovoort. Bij een enkele plaat blijft
+de gekozen bestandsnaam intact. Het venster begint met `nest.svg` en toont de
+huidige werkmap. Relatieve namen worden daarin opgeslagen: starten vanuit
+`build/` voegt dus geen tweede `build/` toe. Je kunt ook een volledig pad
+invullen; de doelmap moet al bestaan.
+
+**Save and quit** opent eerst ditzelfde venster voor de bestandsnaam. Met
+Cancel ga je terug naar de viewer. Bij een schrijffout blijft het venster
+open om het pad aan te passen en opnieuw te proberen. Afsluiten gebeurt pas
+als alle bestanden succesvol zijn geschreven en gesloten. Bij een fout toont
+de GUI hoeveel bestanden al geschreven zijn, de bestandsnaam en de reden van
+het besturingssysteem; reeds geschreven bestanden blijven staan.
+
+Voor scripts kiest `--sheet` een plaat vanaf 1 en `--step` een lokaal aantal
+zichtbare onderdelen. `--svg` exporteert het volledige beginresultaat:
+
+```sh
+./build/bp_gui jobs/multisheet.job --sheets 2 --search 128 --sheet 2 \
+    --svg build/gui.svg --shot build/plate2.ppm --frames 8
+python3 tools/check_gui.py
+```
+
+De controle heeft een werkend display nodig en gebruikt alleen de standaard-
+bibliotheek van Python. Hij controleert de pixels van beide platen, een lege
+replay, de verhouding van de bounding box, de SVG-identiteiten en tussenruimte,
+en lege/gedeeltelijke resultaten en foutuitgangen. PNG-voorbeelden en SVGs
+komen in `build/gui-check/`.
+
+`python3 tools/check_gui_sheet_size.py` controleert plaatformaten in het echte
+venster: de eigen maat van de job, het laserpreset in beide standen,
+1250 x 2500 mm bij 1 en 0,5 mm, en een getypt reststuk. Steeds moeten de
+verhouding van de getekende plaat en de maat in de SVG kloppen, en wordt het
+legplan opnieuw gecontroleerd. Daarna volgen Apply & Pack, het behoud van het
+vorige resultaat bij een geweigerde maat, en het terugzetten van de selectie
+naar plaat 1 als de nieuwe maat minder platen nodig heeft. Uitvoer komt in
+`build/gui-sheet-size/`.
+
+`python3 tools/check_gui_save.py` controleert daarnaast de echte route
+Quit -> Save and quit -> bestandsnaam -> Save, inclusief Cancel en opnieuw
+proberen na een ongeldig pad. Dit vereist X11/XWayland en de X11/XTest-
+bibliotheken. De test start viewers in eigen mappen onder `build/` en bedient
+het toetsenbord, in plaats van de automatische exportoptie `--svg` te gebruiken.
+
 | | |
 | --- | --- |
 | `Ctrl+O` | job openen, met een klein venster dat `.job`-bestanden toont |
-| `Ctrl+R` | opnieuw inlezen, zodat een aangepast bestand of celgrootte meetelt |
-| `F5` | opnieuw nesten |
+| `Ctrl+R` | opnieuw inlezen, met een aangepast bestand en de geometrie-instellingen |
+| `F5` | opnieuw nesten, en eerst een gewijzigde plaat- of celgrootte toepassen |
 | `Ctrl+S` | legplan als SVG wegschrijven |
 | `Ctrl+Q` | afsluiten |
 

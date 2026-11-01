@@ -1,0 +1,8 @@
+# Sheet 1 is filled by the first part. The other two spill onto sheet 2.
+# A narrower final container trades height for a smaller W * H bounding box.
+sheet 104 104
+cell 1
+clearance 1
+rect 1 1 102 102 0
+rect 2 1 40 60 0
+rect 3 1 60 30 0

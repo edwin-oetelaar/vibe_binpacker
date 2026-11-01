@@ -25,23 +25,28 @@
 #include "cimgui.h"
 #include "cimgui_impl.h"
 
+#include "bp_contract.h"
 #include "bp_job.h"
 #include "bp_mask.h"
+#include "bp_multisheet.h"
 #include "bp_nester.h"
 #include "bp_place.h"
 #include "bp_score.h"
 #include "bp_search.h"
-#include "bp_svg.h"
+#include "bp_sheet.h"
+#include "bp_view.h"
 
 #include <GL/gl.h>
 #include <GLFW/glfw3.h>
 #include <dirent.h>
 #include <limits.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #define igGetIO igGetIO_Nil
 
@@ -55,7 +60,8 @@ typedef enum {
     S_POPUP_OPEN = 1,
     S_POPUP_SAVE = 2,
     S_POPUP_QUIT = 3,
-    S_POPUP_ABOUT = 4
+    S_POPUP_ABOUT = 4,
+    S_POPUP_SAVE_QUIT = 5
 } s_popup_t;
 
 /* One line of the file browser. */
@@ -85,43 +91,86 @@ static const ImU32 s_palette[] = {
 
 #define S_PALETTE_SIZE (sizeof s_palette / sizeof s_palette[0])
 
+/*
+ * Plate sizes offered in the geometry combo. The first entry keeps the job
+ * file's own sheet line and the last one is whatever was typed; a preset only
+ * fills the fields, so choosing one is never more than typing its numbers.
+ */
+typedef struct {
+    const char *label;
+    double width_mm;
+    double height_mm;
+} s_preset_t;
+
+static const s_preset_t s_presets[] = {
+    { "from job file", 0.0, 0.0 },
+    { "500 x 500 mm", 500.0, 500.0 },
+    { "600 x 600 mm", 600.0, 600.0 },
+    { "600 x 300 mm", 600.0, 300.0 },
+    { "800 x 600 mm - laser", 800.0, 600.0 },
+    { "1200 x 1200 mm", 1200.0, 1200.0 },
+    { "1250 x 2500 mm", 1250.0, 2500.0 },
+    { "custom", 0.0, 0.0 }
+};
+
+#define S_PRESET_COUNT ((int) (sizeof s_presets / sizeof s_presets[0]))
+#define S_PRESET_JOB 0
+#define S_PRESET_CUSTOM (S_PRESET_COUNT - 1)
+
 /* Everything the window shows and everything it lets you change. */
 typedef struct {
     char job_path[S_PATH_MAX];
     char status[S_PATH_MAX + 256U];
+    char loaded_path[S_PATH_MAX];
     bp_job_t *job;
+    /* Allocated with the job, before publishing it; reused by every solve. */
+    bp_sheet_layout_t *sheets;
+    bp_sheet_layout_t *scratch_sheets;
 
-    /* Controls. */
-    float cell_size_mm;
+    /*
+     * Geometry controls. They take effect only when a job is (re)built, by
+     * Load or by Apply & Pack; until then the published result keeps the size
+     * it was packed on.
+     */
+    int size_preset;
+    double sheet_width_mm;
+    double sheet_height_mm;
+    bool cell_from_job;
+    double cell_size_mm;
+
+    /* Packing controls. */
     int sort_index;
     int mode_index;
+    bool multiple_sheets;
+    int max_sheets;
     bool use_search;
+    bool fixed_rounds;
+    int search_rounds;
     float time_budget_seconds;
     float compact_fraction;
     float blink_rate;
     int max_ruin;
 
-    /* Result, as a packed list so the drawing loop stays simple. */
-    uint32_t placement_count;
-    uint32_t placed_count;
-    uint32_t unplaced_count;
-    uint32_t used_width_cells;
-    uint32_t used_height_cells;
-    uint64_t placed_area_cells;
+    /* Published result is independent of pending control edits and bitmap scratch. */
+    bp_view_t result;
+    char result_settings[192];
     double seconds;
-    int step;
+    uint32_t iterations_run;
+    uint32_t improvements;
 
     /* View. */
     float zoom;
     ImVec2 pan;
     int fit_pending;
     bool show_labels;
+    bool show_box;
 
     /* Menus, dialogs and leaving. */
     s_popup_t pending_popup;
     s_browser_t browser;
     char save_path[S_PATH_MAX];
-    int saved_since_pack;
+    /* A cancelled or failed save must not complete the pending quit action. */
+    int quit_after_save;
     int quit;
 } s_app_t;
 
@@ -136,38 +185,172 @@ s_vec(float x, float y)
     return value;
 }
 
-/* Releases any loaded job and reports why, so the window never lies. */
-static void
-s_load(s_app_t *app)
+/* Returns the preset with exactly these dimensions, or the custom entry. */
+static int
+s_preset_for(double width_mm, double height_mm)
 {
-    bp_job_load_result_t loaded;
+    int index;
 
+    for (index = S_PRESET_JOB + 1; index < S_PRESET_CUSTOM; ++index)
+        if (s_presets[index].width_mm == width_mm
+            && s_presets[index].height_mm == height_mm)
+            return index;
+    return S_PRESET_CUSTOM;
+}
+
+/*
+ * Shows the job file's own values in the fields that are set to follow it, so
+ * switching to custom starts from what is actually in force.
+ */
+static void
+s_sync_geometry_fields(s_app_t *app)
+{
+    BP_REQUIRE(app && app->job);
+    if (app->size_preset == S_PRESET_JOB) {
+        app->sheet_width_mm = app->job->file_sheet_width_mm;
+        app->sheet_height_mm = app->job->file_sheet_height_mm;
+    }
+    if (app->cell_from_job)
+        app->cell_size_mm = app->job->file_cell_size_mm;
+}
+
+/*
+ * Builds a job from path with the geometry controls, and commits it only when
+ * everything is allocated; any failure retains the old job and view.
+ *
+ * A typed zero would mean "no override" to the loader, so typed values are
+ * checked here first: an empty field must never quietly mean the job file.
+ */
+static bp_job_load_result_t
+s_load(s_app_t *app, const char *path)
+{
+    char chosen[S_PATH_MAX];
+    char explanation[BP_SHEET_EXPLAIN_CAPACITY];
+    int sheet_override;
+    bp_job_load_result_t loaded;
+    bp_sheet_layout_t *sheets;
+    bp_sheet_layout_t *scratch;
+
+    BP_REQUIRE(app);
+    BP_REQUIRE(path && strlen(path) < sizeof chosen);
+    /* path may be app->loaded_path, which a successful load overwrites. */
+    memcpy(chosen, path, strlen(path) + 1U);
+    sheet_override = app->size_preset != S_PRESET_JOB;
+    if (sheet_override && (!isfinite(app->sheet_width_mm)
+        || !isfinite(app->sheet_height_mm) || !(app->sheet_width_mm > 0.0)
+        || !(app->sheet_height_mm > 0.0))) {
+        (void) snprintf(app->status, sizeof app->status, "not applied: %s",
+            bp_sheet_status_text(BP_SHEET_BAD_SIZE));
+        return (bp_job_load_result_t) { .status = BP_JOB_BAD_OVERRIDE };
+    }
+    if (!app->cell_from_job && (!isfinite(app->cell_size_mm)
+        || !(app->cell_size_mm > 0.0))) {
+        (void) snprintf(app->status, sizeof app->status, "not applied: %s",
+            bp_sheet_status_text(BP_SHEET_BAD_CELL_SIZE));
+        return (bp_job_load_result_t) { .status = BP_JOB_BAD_OVERRIDE };
+    }
+    loaded = bp_job_load_with((bp_job_load_args_t) {
+        .path = chosen,
+        .sheet_width_mm = sheet_override ? app->sheet_width_mm : 0.0,
+        .sheet_height_mm = sheet_override ? app->sheet_height_mm : 0.0,
+        .cell_size_mm = app->cell_from_job ? 0.0 : app->cell_size_mm,
+        .limits = bp_sheet_default_limits()
+    });
+    if (loaded.status != BP_JOB_OK) {
+        if (loaded.line_number > 0U) {
+            (void) snprintf(app->status, sizeof app->status, "%s:%u: %s",
+                chosen, loaded.line_number, bp_job_status_text(loaded.status));
+        } else if (loaded.sheet_plan.status != BP_SHEET_OK) {
+            bp_sheet_explain(&loaded.sheet_plan, bp_sheet_default_limits(),
+                explanation, sizeof explanation);
+            (void) snprintf(app->status, sizeof app->status,
+                "not applied: %s", explanation);
+        } else {
+            (void) snprintf(app->status, sizeof app->status, "%s: %s",
+                chosen, bp_job_status_text(loaded.status));
+        }
+        return loaded;
+    }
+    /* ImGui's local replay and integer controls use int, not uint32_t. */
+    if (loaded.job->part_count > INT_MAX) {
+        bp_job_destroy(&loaded.job);
+        loaded.status = BP_JOB_TOO_LARGE;
+        (void) snprintf(app->status, sizeof app->status, "too many parts for the viewer");
+        return loaded;
+    }
+    sheets = calloc(loaded.job->part_count, sizeof *sheets);
+    scratch = calloc(loaded.job->part_count, sizeof *scratch);
+    if (!sheets || !scratch) {
+        free(sheets);
+        free(scratch);
+        bp_job_destroy(&loaded.job);
+        loaded.status = BP_JOB_OUT_OF_MEMORY;
+        (void) snprintf(app->status, sizeof app->status, "out of memory for plate results");
+        return loaded;
+    }
+    app->result = (bp_view_t) { 0 };
     if (app->job)
         bp_job_destroy(&app->job);
-    app->placement_count = 0U;
-    app->placed_count = 0U;
-    app->unplaced_count = 0U;
-    app->step = 0;
-
-    loaded = bp_job_load(app->job_path,
-        app->cell_size_mm > 0.0f ? (double) app->cell_size_mm : 0.0);
-    if (loaded.status != BP_JOB_OK) {
-        if (loaded.line_number > 0U)
-            (void) snprintf(app->status, sizeof app->status, "%s:%u: %s",
-                app->job_path, loaded.line_number,
-                bp_job_status_text(loaded.status));
-        else
-            (void) snprintf(app->status, sizeof app->status, "%s: %s",
-                app->job_path, bp_job_status_text(loaded.status));
-        return;
-    }
+    free(app->sheets);
+    free(app->scratch_sheets);
     app->job = loaded.job;
-    app->cell_size_mm = (float) app->job->cell_size_mm;
+    app->sheets = sheets;
+    app->scratch_sheets = scratch;
+    memcpy(app->loaded_path, chosen, strlen(chosen) + 1U);
+    app->result_settings[0] = '\0';
+    s_sync_geometry_fields(app);
     app->fit_pending = 1;
     (void) snprintf(app->status, sizeof app->status,
-        "loaded %u parts on %.0f x %.0f mm at %.3f mm/cell",
+        "loaded %u parts on %.6g x %.6g mm%s at %.6g mm/cell%s",
         (unsigned) app->job->part_count, app->job->sheet_width_mm,
-        app->job->sheet_height_mm, app->job->cell_size_mm);
+        app->job->sheet_height_mm, sheet_override ? " (override)" : "",
+        app->job->cell_size_mm, app->cell_from_job ? "" : " (override)");
+    return loaded;
+}
+
+/*
+ * Reports whether the geometry controls ask for something other than the job
+ * in force. Compared on the effective sizes rather than on the controls, so
+ * choosing a preset equal to the current size is not a pending change.
+ */
+static int
+s_geometry_pending(const s_app_t *app)
+{
+    const bp_job_t *job;
+    double width_mm;
+    double height_mm;
+    double cell_size_mm;
+
+    BP_REQUIRE(app);
+    job = app->job;
+    if (!job)
+        return 0;
+    width_mm = app->size_preset == S_PRESET_JOB ? job->file_sheet_width_mm
+        : app->sheet_width_mm;
+    height_mm = app->size_preset == S_PRESET_JOB ? job->file_sheet_height_mm
+        : app->sheet_height_mm;
+    cell_size_mm = app->cell_from_job ? job->file_cell_size_mm
+        : app->cell_size_mm;
+    return width_mm != job->sheet_width_mm || height_mm != job->sheet_height_mm
+        || cell_size_mm != job->cell_size_mm;
+}
+
+/* Checks the packing controls, so a refused pack never costs the old result. */
+static int
+s_pack_controls_valid(s_app_t *app)
+{
+    BP_REQUIRE(app);
+    if ((app->multiple_sheets && app->max_sheets <= 0)
+        || (app->use_search && app->fixed_rounds && app->search_rounds <= 0)) {
+        (void) snprintf(app->status, sizeof app->status, "plate limit and search rounds must be positive");
+        return 0;
+    }
+    if (app->use_search && !app->fixed_rounds && (!isfinite(app->time_budget_seconds)
+        || app->time_budget_seconds <= 0.0f)) {
+        (void) snprintf(app->status, sizeof app->status, "search budget must be finite and positive");
+        return 0;
+    }
+    return 1;
 }
 
 /* Runs one pass or the full search, leaving a packed placement list. */
@@ -182,14 +365,44 @@ s_pack(s_app_t *app)
     static const bp_place_mode_t modes[] = {
         BP_PLACE_JUMP, BP_PLACE_EROSION, BP_PLACE_REFERENCE
     };
-    bp_job_t *job = app->job;
+    bp_job_t *job;
     clock_t started;
+    uint32_t placement_count;
+    uint32_t sheet_count;
+    uint32_t iterations;
 
-    if (!job)
+    BP_REQUIRE(app);
+    job = app->job;
+    if (!job || !s_pack_controls_valid(app))
         return;
     started = clock();
+    iterations = app->use_search
+        ? (app->fixed_rounds ? (uint32_t) app->search_rounds : UINT32_MAX) : 0U;
+    app->iterations_run = 0U;
+    app->improvements = 0U;
 
-    if (app->use_search) {
+    if (app->multiple_sheets) {
+        bp_multisheet_result_t result = bp_multisheet_solve((bp_multisheet_args_t) {
+            .sheet = &job->sheet, .parts = job->parts, .part_count = job->part_count,
+            .max_sheets = (uint32_t) app->max_sheets,
+            .sort = sorts[app->sort_index], .place_mode = modes[app->mode_index],
+            .iterations = iterations,
+            .time_budget_seconds = app->use_search && !app->fixed_rounds
+                ? (double) app->time_budget_seconds : 0.0,
+            .seed = UINT64_C(0x5deece66d),
+            .scratch_order = job->order, .scratch_best_order = job->scratch_weights,
+            .scratch_assigned = job->scratch_placed, .scratch_placements = job->scratch_best,
+            .scratch_sheets = app->scratch_sheets,
+            .scratch_rows = job->scratch_rows, .scratch_row_capacity = job->scratch_row_capacity,
+            .placements = job->placements, .sheets = app->sheets,
+            .part_capacity = job->part_count, .sheet_capacity = job->part_count
+        });
+
+        placement_count = result.placed_count;
+        sheet_count = result.sheet_count;
+        app->iterations_run = result.iterations_run;
+        app->improvements = result.improvements;
+    } else if (app->use_search) {
         bp_search_result_t result;
         uint32_t index;
 
@@ -202,8 +415,8 @@ s_pack(s_app_t *app)
             .max_positions = 48U,
             .max_ruin = (uint32_t) app->max_ruin,
             .blink_rate = (double) app->blink_rate,
-            .iterations = UINT32_MAX,
-            .time_budget_seconds = (double) app->time_budget_seconds,
+            .iterations = iterations,
+            .time_budget_seconds = app->fixed_rounds ? 0.0 : (double) app->time_budget_seconds,
             .seed = UINT64_C(0x5deece66d),
             .scratch_order = job->order,
             .scratch_placed = job->scratch_placed,
@@ -227,17 +440,15 @@ s_pack(s_app_t *app)
         });
 
         /* The drawing loop wants a list, not one entry per part. */
-        app->placement_count = 0U;
+        placement_count = 0U;
         for (index = 0U; index < job->part_count; ++index)
             if (job->placed[index])
-                job->placements[app->placement_count++] =
+                job->placements[placement_count++] =
                     job->placements[index];
 
-        app->placed_count = result.placed_count;
-        app->unplaced_count = result.unplaced_count;
-        app->used_width_cells = result.used_width_cells;
-        app->used_height_cells = result.used_height_cells;
-        app->placed_area_cells = result.placed_area_cells;
+        sheet_count = placement_count > 0U ? 1U : 0U;
+        app->iterations_run = result.iterations_run;
+        app->improvements = result.improvements;
     } else {
         bp_nester_solve_result_t result = bp_nester_solve(
             (bp_nester_solve_args_t) {
@@ -254,20 +465,62 @@ s_pack(s_app_t *app)
                 .placement_capacity = job->part_count
             });
 
-        app->placement_count = result.placed_count;
-        app->placed_count = result.placed_count;
-        app->unplaced_count = result.unplaced_count;
-        app->used_width_cells = result.used_width_cells;
-        app->used_height_cells = result.used_height_cells;
-        app->placed_area_cells = result.placed_area_cells;
+        placement_count = result.placed_count;
+        sheet_count = placement_count > 0U ? 1U : 0U;
     }
 
+    if (!app->multiple_sheets && sheet_count > 0U)
+        app->sheets[0] = (bp_sheet_layout_t) { .placement_count = placement_count };
+    app->result = bp_view_publish((bp_view_publish_args_t) {
+        .parts = job->parts, .labels = job->labels, .part_count = job->part_count,
+        .placements = job->placements, .placement_count = placement_count,
+        .sheets = app->sheets, .sheet_count = sheet_count, .sheet_capacity = job->part_count,
+        .placed = job->placed, .placed_capacity = job->part_count,
+        .sheet_width_cells = job->sheet_width_cells,
+        .sheet_height_cells = job->sheet_height_cells, .cell_size_mm = job->cell_size_mm,
+        .multiple_sheets = app->multiple_sheets
+    });
     app->seconds = (double) (clock() - started) / CLOCKS_PER_SEC;
-    app->step = (int) app->placement_count;
-    app->saved_since_pack = 0;
+    (void) snprintf(app->result_settings, sizeof app->result_settings,
+        "%s; limit %u; %s", app->multiple_sheets ? "multi: count, then last W * H"
+            : "single: area, then height",
+        app->multiple_sheets ? (unsigned) app->max_sheets : 1U,
+        app->use_search ? "optimised" : "construction");
+    if (app->use_search) {
+        size_t used = strlen(app->result_settings);
+
+        if (app->fixed_rounds)
+            (void) snprintf(app->result_settings + used, sizeof app->result_settings - used,
+                "; budget %u rounds", (unsigned) app->search_rounds);
+        else
+            (void) snprintf(app->result_settings + used, sizeof app->result_settings - used,
+                "; budget %.1f CPU s", (double) app->time_budget_seconds);
+    }
     (void) snprintf(app->status, sizeof app->status,
-        "packed %u of %u parts in %.3f s", (unsigned) app->placed_count,
-        (unsigned) job->part_count, app->seconds);
+        "packed %u of %u parts on %u plates in %.3f CPU s",
+        (unsigned) placement_count, (unsigned) job->part_count,
+        (unsigned) sheet_count, app->seconds);
+}
+
+/*
+ * The Pack action: a pending geometry change rebuilds the job in force first.
+ * Every check runs before the old job is touched, so a refused size or a bad
+ * packing control leaves the previous result shown and exportable.
+ */
+static void
+s_pack_or_apply(s_app_t *app)
+{
+    BP_REQUIRE(app);
+    if (!app->job || !s_pack_controls_valid(app))
+        return;
+    if (s_geometry_pending(app)) {
+        char path[S_PATH_MAX];
+
+        memcpy(path, app->loaded_path, strlen(app->loaded_path) + 1U);
+        if (s_load(app, path).status != BP_JOB_OK)
+            return;
+    }
+    s_pack(app);
 }
 
 /*
@@ -382,49 +635,38 @@ s_choose_job(s_app_t *app, const char *name)
         return;
     }
     memcpy(app->job_path, chosen, strlen(chosen) + 1U);
-    s_load(app);
-    if (app->job)
+    if (s_pack_controls_valid(app) && s_load(app, app->job_path).status == BP_JOB_OK)
         s_pack(app);
 }
 
-/* Writes the current layout as SVG, and reports what happened. */
-static void
+/* Exports every full plate, retaining unsaved state and the dialog on I/O failure. */
+static bp_view_export_result_t
 s_save_svg(s_app_t *app)
 {
-    FILE *out;
-    bp_svg_result_t result;
+    char path[S_PATH_MAX + 32U];
+    bp_view_export_result_t result;
 
-    if (!app->job || app->placement_count == 0U) {
+    BP_REQUIRE(app);
+    if (!app->result.parts || app->result.placement_count == 0U) {
         (void) snprintf(app->status, sizeof app->status,
             "nothing to save: pack something first");
-        return;
+        return (bp_view_export_result_t) { .status = BP_VIEW_EXPORT_EMPTY };
     }
-    out = fopen(app->save_path, "w");
-    if (!out) {
-        (void) snprintf(app->status, sizeof app->status, "cannot write %s",
-            app->save_path);
-        return;
-    }
-    result = bp_svg_write((bp_svg_write_args_t) {
-        .out = out,
-        .sheet_width_cells = app->job->sheet_width_cells,
-        .sheet_height_cells = app->job->sheet_height_cells,
-        .cell_size_mm = app->job->cell_size_mm,
-        .parts = app->job->parts,
-        .part_count = app->job->part_count,
-        .placements = app->job->placements,
-        .placement_count = app->placement_count,
-        .labels = app->job->labels,
-        .draw_labels = 1
+    result = bp_view_export((bp_view_export_args_t) {
+        .view = &app->result, .path = app->save_path,
+        .scratch_path = path, .path_capacity = sizeof path
     });
-    if (fclose(out) != 0 || result.status != BP_SVG_OK) {
-        (void) snprintf(app->status, sizeof app->status, "SVG write failed: %s",
-            app->save_path);
-        return;
+    if (result.status != BP_VIEW_EXPORT_OK) {
+        (void) snprintf(app->status, sizeof app->status,
+            "export failed after %u plates: %s%s (%s)", (unsigned) result.written_count,
+            result.status == BP_VIEW_EXPORT_PATH_TOO_LONG ? "path too long: " : "",
+            path[0] ? path : app->save_path,
+            result.system_error ? strerror(result.system_error) : "check the output path");
+        return result;
     }
-    app->saved_since_pack = 1;
-    (void) snprintf(app->status, sizeof app->status, "wrote %s",
-        app->save_path);
+    (void) snprintf(app->status, sizeof app->status, "saved all %u plates: %s",
+        (unsigned) result.written_count, app->save_path);
+    return result;
 }
 
 /*
@@ -434,7 +676,10 @@ s_save_svg(s_app_t *app)
 static void
 s_request_quit(s_app_t *app)
 {
-    if (app->placement_count > 0U && !app->saved_since_pack)
+    BP_REQUIRE(app);
+    if (app->quit_after_save)
+        return;
+    if (app->result.placement_count > 0U && !app->result.saved)
         app->pending_popup = S_POPUP_QUIT;
     else
         app->quit = 1;
@@ -455,7 +700,9 @@ s_draw_popups(s_app_t *app)
     if (app->pending_popup == S_POPUP_OPEN) {
         s_browser_scan(&app->browser);
         igOpenPopup_Str("Open job", 0);
-    } else if (app->pending_popup == S_POPUP_SAVE) {
+    } else if (app->pending_popup == S_POPUP_SAVE
+        || app->pending_popup == S_POPUP_SAVE_QUIT) {
+        app->quit_after_save = app->pending_popup == S_POPUP_SAVE_QUIT;
         igOpenPopup_Str("Save SVG", 0);
     } else if (app->pending_popup == S_POPUP_QUIT) {
         igOpenPopup_Str("Quit", 0);
@@ -519,31 +766,51 @@ s_draw_popups(s_app_t *app)
     }
 
     igSetNextWindowPos(centre, ImGuiCond_Appearing, s_vec(0.5f, 0.5f));
-    if (igBeginPopupModal("Save SVG", NULL, 0)) {
+    if (igBeginPopupModal("Save SVG", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        char directory[PATH_MAX];
+
         modal_open = 1;
-        igText("write the current layout to");
+        igPushTextWrapPos(560.0f);
+        igText("export all %u full plates%s", (unsigned) app->result.sheet_count,
+            app->quit_after_save ? " and quit after saving" : "");
+        if (getcwd(directory, sizeof directory))
+            igTextWrapped("Relative paths are saved in: %s", directory);
+        else
+            igTextWrapped("Cannot determine the working directory. Choose an absolute path.");
+        if (app->result.multiple_sheets)
+            igText("base name -> name-001.svg, name-002.svg, ...");
+        igText("Output filename or full path (folder must exist):");
+        igSetNextItemWidth(520.0f);
         (void) igInputText("##save", app->save_path, sizeof app->save_path, 0,
             NULL, NULL);
         if (igButton("Save", s_vec(90.0f, 0.0f))) {
-            s_save_svg(app);
-            igCloseCurrentPopup();
+            if (s_save_svg(app).status == BP_VIEW_EXPORT_OK) {
+                igCloseCurrentPopup();
+                if (app->quit_after_save)
+                    app->quit = 1;
+                app->quit_after_save = 0;
+            }
         }
         igSameLine(0.0f, 8.0f);
         if (igButton("Cancel", s_vec(90.0f, 0.0f))
-            || igIsKeyPressed_Bool(ImGuiKey_Escape, false))
+            || igIsKeyPressed_Bool(ImGuiKey_Escape, false)) {
+            app->quit_after_save = 0;
             igCloseCurrentPopup();
+        }
+        igTextWrapped("%s", app->status);
+        igPopTextWrapPos();
         igEndPopup();
     }
 
     igSetNextWindowPos(centre, ImGuiCond_Appearing, s_vec(0.5f, 0.5f));
-    if (igBeginPopupModal("Quit", NULL, 0)) {
+    if (igBeginPopupModal("Quit", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
         modal_open = 1;
         igText("This packing has not been saved.");
         igSpacing();
         if (igButton("Save and quit", s_vec(130.0f, 0.0f))) {
-            s_save_svg(app);
-            app->quit = 1;
+            app->quit_after_save = 1;
             igCloseCurrentPopup();
+            app->pending_popup = S_POPUP_SAVE_QUIT;
         }
         igSameLine(0.0f, 8.0f);
         if (igButton("Quit anyway", s_vec(110.0f, 0.0f))) {
@@ -554,6 +821,7 @@ s_draw_popups(s_app_t *app)
         if (igButton("Cancel", s_vec(90.0f, 0.0f))
             || igIsKeyPressed_Bool(ImGuiKey_Escape, false))
             igCloseCurrentPopup();
+        igTextWrapped("%s", app->status);
         igEndPopup();
     }
 
@@ -562,7 +830,9 @@ s_draw_popups(s_app_t *app)
         modal_open = 1;
         igText("drag              pan the sheet");
         igText("mouse wheel       zoom about the cursor");
-        igText("step slider       replay the placement order");
+        igText("plate list        select a plate");
+        igText("step slider       replay this plate's final placement order");
+        igText("yellow box        full-result bounds, not the visible prefix");
         igSpacing();
         igText("Ctrl+O  open      Ctrl+R  reload");
         igText("F5      pack      Ctrl+S  save SVG");
@@ -588,15 +858,16 @@ s_draw_menu(s_app_t *app)
             if (igMenuItem_Bool("Open...", "Ctrl+O", false, true))
                 app->pending_popup = S_POPUP_OPEN;
             if (igMenuItem_Bool("Reload", "Ctrl+R", false, true)) {
-                s_load(app);
-                if (app->job)
+                if (s_pack_controls_valid(app)
+                    && s_load(app, app->job_path).status == BP_JOB_OK)
                     s_pack(app);
             }
-            if (igMenuItem_Bool("Pack", "F5", false, app->job != NULL))
-                s_pack(app);
+            if (igMenuItem_Bool(s_geometry_pending(app) ? "Apply & Pack" : "Pack",
+                "F5", false, app->job != NULL))
+                s_pack_or_apply(app);
             igSeparator();
             if (igMenuItem_Bool("Save SVG...", "Ctrl+S", false,
-                app->placement_count > 0U))
+                app->result.placement_count > 0U))
                 app->pending_popup = S_POPUP_SAVE;
             igSeparator();
             if (igMenuItem_Bool("Quit", "Ctrl+Q", false, true))
@@ -608,6 +879,7 @@ s_draw_menu(s_app_t *app)
                 app->fit_pending = 1;
             (void) igMenuItem_BoolPtr("Part numbers", NULL, &app->show_labels,
                 true);
+            (void) igMenuItem_BoolPtr("Final bounding box", NULL, &app->show_box, true);
             igEndMenu();
         }
         if (igBeginMenu("Help", true)) {
@@ -635,15 +907,15 @@ s_handle_shortcuts(s_app_t *app)
     if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_O, false))
         app->pending_popup = S_POPUP_OPEN;
     if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_R, false)) {
-        s_load(app);
-        if (app->job)
+        if (s_pack_controls_valid(app)
+            && s_load(app, app->job_path).status == BP_JOB_OK)
             s_pack(app);
     }
     if (io->KeyCtrl && igIsKeyPressed_Bool(ImGuiKey_S, false)
-        && app->placement_count > 0U)
+        && app->result.placement_count > 0U)
         app->pending_popup = S_POPUP_SAVE;
     if (igIsKeyPressed_Bool(ImGuiKey_F5, false) && app->job)
-        s_pack(app);
+        s_pack_or_apply(app);
 }
 
 /* Draws the sheet and the placements, and handles panning and zooming. */
@@ -653,12 +925,28 @@ s_draw_sheet(s_app_t *app)
     bp_job_t *job = app->job;
     ImDrawList *draw = igGetWindowDrawList();
     ImGuiIO *io = igGetIO();
-    ImVec2 origin = igGetCursorScreenPos();
-    ImVec2 size = igGetContentRegionAvail();
+    ImVec2 origin;
+    ImVec2 size;
     float sheet_width;
     float sheet_height;
     uint32_t index;
 
+    if (app->result.sheet_count > 0U) {
+        const bp_sheet_layout_t *sheet = bp_view_active(&app->result);
+        double cell = app->result.cell_size_mm;
+
+        igText("Plate %u / %u%s", (unsigned) app->result.active_sheet + 1U,
+            (unsigned) app->result.sheet_count,
+            app->result.active_sheet + 1U == app->result.sheet_count ? " - last plate" : "");
+        igText("Final box: %.2f x %.2f mm = %.2f mm2; origin (%.2f, %.2f) mm",
+            sheet->width_cells * cell, sheet->height_cells * cell,
+            (double) sheet->width_cells * sheet->height_cells * cell * cell,
+            sheet->min_x_cells * cell, sheet->min_y_cells * cell);
+    } else {
+        igText("%s", app->result.parts ? "No used plates - see unplaced parts" : "No packing yet");
+    }
+    origin = igGetCursorScreenPos();
+    size = igGetContentRegionAvail();
     if (size.x < 32.0f)
         size.x = 32.0f;
     if (size.y < 32.0f)
@@ -719,9 +1007,8 @@ s_draw_sheet(s_app_t *app)
             origin.y + app->pan.y + sheet_height),
         0xff909090, 0.0f, 1.5f, 0);
 
-    for (index = 0U; index < (uint32_t) app->step
-        && index < app->placement_count; ++index) {
-        const bp_placement_t *spot = &job->placements[index];
+    for (index = 0U; index < app->result.visible_count; ++index) {
+        const bp_placement_t *spot = bp_view_placement(&app->result, index);
         const bp_part_t *part = &job->parts[spot->part_index];
         const bp_orientation_t *option = &part->orientations[spot->orientation];
         const bp_mask_t *mask = option->solid;
@@ -786,7 +1073,159 @@ s_draw_sheet(s_app_t *app)
                 NULL);
         }
     }
+    if (app->show_box && app->result.sheet_count > 0U) {
+        const bp_sheet_layout_t *sheet = bp_view_active(&app->result);
+        float left = origin.x + app->pan.x + (float) sheet->min_x_cells * app->zoom;
+        float right = left + (float) sheet->width_cells * app->zoom;
+        float bottom = origin.y + app->pan.y
+            + (float) (job->sheet_height_cells - sheet->min_y_cells) * app->zoom;
+        float top = bottom - (float) sheet->height_cells * app->zoom;
+
+        /* This is the full solution's score box, even when replay hides parts. */
+        ImDrawList_AddRect(draw, s_vec(left, top), s_vec(right, bottom),
+            0xff40dfff, 0.0f, 2.0f, 0);
+    }
     ImDrawList_PopClipRect(draw);
+}
+
+/* Lists completed plates; selection changes only the view, never solver buffers. */
+static void
+s_draw_plates(s_app_t *app)
+{
+    bp_view_t *view;
+    uint32_t index;
+
+    BP_REQUIRE(app);
+    view = &app->result;
+    if (view->sheet_count == 0U)
+        return;
+    if (igBeginTable("plates", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg,
+        s_vec(0.0f, 0.0f), 0.0f)) {
+        igTableSetupColumn("Plate", ImGuiTableColumnFlags_WidthStretch, 0.6f, 0);
+        igTableSetupColumn("Parts", ImGuiTableColumnFlags_WidthStretch, 0.7f, 0);
+        igTableSetupColumn("Used %", ImGuiTableColumnFlags_WidthStretch, 0.8f, 0);
+        igTableSetupColumn("Box mm", ImGuiTableColumnFlags_WidthStretch, 1.7f, 0);
+        igTableHeadersRow();
+        for (index = 0U; index < view->sheet_count; ++index) {
+            const bp_sheet_layout_t *sheet = &view->sheets[index];
+            char label[32];
+            double utilisation = (double) sheet->placed_area_cells
+                / ((double) view->sheet_width_cells * view->sheet_height_cells);
+
+            igTableNextRow(0, 0.0f);
+            (void) igTableNextColumn();
+            (void) snprintf(label, sizeof label, "%u%s", (unsigned) index + 1U,
+                index + 1U == view->sheet_count ? "*" : "");
+            if (igSelectable_Bool(label, view->active_sheet == index,
+                ImGuiSelectableFlags_SpanAllColumns, s_vec(0.0f, 0.0f)))
+                bp_view_select(view, index);
+            (void) igTableNextColumn();
+            igText("%u", (unsigned) sheet->placement_count);
+            (void) igTableNextColumn();
+            igText("%.1f", utilisation * 100.0);
+            (void) igTableNextColumn();
+            igText("%.1fx%.1f", sheet->width_cells * view->cell_size_mm,
+                sheet->height_cells * view->cell_size_mm);
+        }
+        igEndTable();
+    }
+    igText("* last plate");
+}
+
+/*
+ * Draws the plate size and raster controls with a live preview of what they
+ * cost. The preview runs the loader's own planning, so a size it shows as
+ * accepted is one Apply & Pack will accept.
+ */
+static void
+s_draw_geometry(s_app_t *app)
+{
+    static const char *labels[S_PRESET_COUNT];
+    const bp_job_t *job;
+    char explanation[BP_SHEET_EXPLAIN_CAPACITY];
+    int index;
+    int known;
+
+    BP_REQUIRE(app);
+    job = app->job;
+    for (index = 0; index < S_PRESET_COUNT; ++index)
+        labels[index] = s_presets[index].label;
+
+    igText("geometry (applies on Load or Apply & Pack)");
+    if (igCombo_Str_arr("plate", &app->size_preset, labels, S_PRESET_COUNT, -1)) {
+        if (app->size_preset == S_PRESET_JOB && job) {
+            app->sheet_width_mm = job->file_sheet_width_mm;
+            app->sheet_height_mm = job->file_sheet_height_mm;
+        } else if (app->size_preset != S_PRESET_JOB
+            && app->size_preset != S_PRESET_CUSTOM) {
+            app->sheet_width_mm = s_presets[app->size_preset].width_mm;
+            app->sheet_height_mm = s_presets[app->size_preset].height_mm;
+        }
+    }
+    /*
+     * Typing a size is choosing a custom one; nothing is sorted or rounded.
+     * One line per setting keeps the panel short enough not to scroll, which
+     * matters for keyboard navigation as much as for the eye.
+     */
+    igSetNextItemWidth(90.0f);
+    if (igInputDouble("##width", &app->sheet_width_mm, 0.0, 0.0, "%.2f", 0))
+        app->size_preset = S_PRESET_CUSTOM;
+    igSameLine(0.0f, 6.0f);
+    igText("x");
+    igSameLine(0.0f, 6.0f);
+    igSetNextItemWidth(90.0f);
+    if (igInputDouble("##height", &app->sheet_height_mm, 0.0, 0.0, "%.2f", 0))
+        app->size_preset = S_PRESET_CUSTOM;
+    igSameLine(0.0f, 6.0f);
+    igText("mm");
+    igSameLine(0.0f, 8.0f);
+    if (igButton("Swap W/H", s_vec(0.0f, 0.0f))) {
+        double width_mm = app->sheet_width_mm;
+
+        app->sheet_width_mm = app->sheet_height_mm;
+        app->sheet_height_mm = width_mm;
+        app->size_preset = S_PRESET_CUSTOM;
+    }
+    if (igCheckbox("cell from job", &app->cell_from_job) && app->cell_from_job
+        && job)
+        app->cell_size_mm = job->file_cell_size_mm;
+    igSameLine(0.0f, 8.0f);
+    igBeginDisabled(app->cell_from_job);
+    igSetNextItemWidth(90.0f);
+    (void) igInputDouble("##cell", &app->cell_size_mm, 0.0, 0.0, "%.3f", 0);
+    igEndDisabled();
+    igSameLine(0.0f, 6.0f);
+    igText("mm cell");
+
+    /* Without a job, "from job file" has no numbers to preview yet. */
+    known = (app->size_preset != S_PRESET_JOB || job) && (!app->cell_from_job || job);
+    if (known) {
+        bp_sheet_plan_t plan = bp_sheet_plan((bp_sheet_plan_args_t) {
+            .width_mm = app->size_preset == S_PRESET_JOB
+                ? job->file_sheet_width_mm : app->sheet_width_mm,
+            .height_mm = app->size_preset == S_PRESET_JOB
+                ? job->file_sheet_height_mm : app->sheet_height_mm,
+            .cell_size_mm = app->cell_from_job ? job->file_cell_size_mm
+                : app->cell_size_mm,
+            .limits = bp_sheet_default_limits()
+        });
+
+        bp_sheet_explain(&plan, bp_sheet_default_limits(), explanation,
+            sizeof explanation);
+        if (plan.status != BP_SHEET_OK)
+            igPushStyleColor_U32(ImGuiCol_Text, 0xff6060ff);
+        igTextWrapped("%s", explanation);
+        if (plan.status != BP_SHEET_OK)
+            igPopStyleColor(1);
+    } else {
+        igTextWrapped("size from the job file, shown once it is loaded");
+    }
+    if (s_geometry_pending(app)) {
+        igPushStyleColor_U32(ImGuiCol_Text, 0xff40dfff);
+        igTextWrapped("not applied yet: showing %.6g x %.6g mm at %.6g mm/cell",
+            job->sheet_width_mm, job->sheet_height_mm, job->cell_size_mm);
+        igPopStyleColor(1);
+    }
 }
 
 /* Draws the control panel and the numbers that go with a packing. */
@@ -799,37 +1238,48 @@ s_draw_controls(s_app_t *app)
     static const char *const mode_names[] = {
         "jump scan", "erosion", "reference scan"
     };
+    static const char *const packing_names[] = { "single plate", "multiple plates" };
+    int packing = app->multiple_sheets ? 1 : 0;
 
     igText("job file");
     (void) igInputText("##path", app->job_path, sizeof app->job_path, 0, NULL,
         NULL);
     if (igButton("Load", s_vec(80.0f, 0.0f)))
-        s_load(app);
+        (void) s_load(app, app->job_path);
     igSameLine(0.0f, 8.0f);
-    if (igButton("Pack", s_vec(80.0f, 0.0f)))
-        s_pack(app);
+    /* The ### keeps one widget identity while the label changes. */
+    if (igButton(s_geometry_pending(app) ? "Apply & Pack###pack" : "Pack###pack",
+        s_vec(100.0f, 0.0f)))
+        s_pack_or_apply(app);
     igSameLine(0.0f, 8.0f);
     if (igButton("Fit view", s_vec(80.0f, 0.0f)))
         app->fit_pending = 1;
 
     igSeparator();
-    igText("geometry");
-    /* Takes effect on the next Load, because it rebuilds every mask. */
-    (void) igSliderFloat("cell mm", &app->cell_size_mm, 0.25f, 4.0f, "%.2f",
-        0);
-    igText("cell size applies when you press Load");
+    s_draw_geometry(app);
 
     igSeparator();
-    igText("search");
-    (void) igCheckbox("ruin and recreate", &app->use_search);
+    igText("packing (applies on Pack)");
+    if (igCombo_Str_arr("packing", &packing, packing_names, 2, -1))
+        app->multiple_sheets = packing == 1;
+    if (app->multiple_sheets)
+        (void) igInputInt("max plates", &app->max_sheets, 1, 4, 0);
+    (void) igCheckbox("optimise", &app->use_search);
     if (app->use_search) {
-        (void) igSliderFloat("seconds", &app->time_budget_seconds, 0.2f,
-            30.0f, "%.1f", 0);
-        (void) igSliderFloat("squeeze share", &app->compact_fraction, 0.0f,
-            1.0f, "%.2f", 0);
-        (void) igSliderFloat("blink", &app->blink_rate, 0.0f, 0.4f, "%.3f", 0);
-        (void) igSliderInt("ruin", &app->max_ruin, 1, 32, "%d", 0);
-    } else {
+        (void) igCheckbox("fixed rounds", &app->fixed_rounds);
+        if (app->fixed_rounds)
+            (void) igInputInt("rounds", &app->search_rounds, 1, 100, 0);
+        else
+            (void) igSliderFloat("CPU seconds", &app->time_budget_seconds, 0.2f,
+                30.0f, "%.1f", 0);
+        if (!app->multiple_sheets) {
+            (void) igSliderFloat("squeeze share", &app->compact_fraction, 0.0f,
+                1.0f, "%.2f", 0);
+            (void) igSliderFloat("blink", &app->blink_rate, 0.0f, 0.4f, "%.3f", 0);
+            (void) igSliderInt("ruin", &app->max_ruin, 1, 32, "%d", 0);
+        }
+    }
+    if (app->multiple_sheets || !app->use_search) {
         (void) igCombo_Str_arr("order", &app->sort_index, sort_names, 3, -1);
         (void) igCombo_Str_arr("search", &app->mode_index, mode_names, 3, -1);
     }
@@ -837,28 +1287,53 @@ s_draw_controls(s_app_t *app)
     igSeparator();
     igText("view");
     (void) igCheckbox("part numbers", &app->show_labels);
-    if (app->placement_count > 0U) {
-        (void) igSliderInt("step", &app->step, 0,
-            (int) app->placement_count, "%d", 0);
-        igText("drag the step slider to replay the placement order");
+    (void) igCheckbox("final bounding box", &app->show_box);
+    s_draw_plates(app);
+    if (app->result.sheet_count > 0U) {
+        int step = (int) app->result.visible_count;
+
+        if (igSliderInt("local step", &step, 0,
+            (int) bp_view_active(&app->result)->placement_count, "%d", 0))
+            bp_view_set_visible(&app->result, (uint32_t) step);
+        igTextWrapped("Replay of the selected plate's final order. Yellow box = full result.");
     }
 
     igSeparator();
-    if (app->job && app->placement_count > 0U) {
-        double sheet_area = (double) app->job->sheet_width_cells
-            * app->job->sheet_height_cells;
+    if (app->result.parts) {
+        const bp_view_t *view = &app->result;
 
-        igText("placed       %u of %u", (unsigned) app->placed_count,
-            (unsigned) app->job->part_count);
-        igText("utilisation  %.2f %%",
-            100.0 * (double) app->placed_area_cells / sheet_area);
-        igText("used box     %.0f x %.0f mm",
-            app->used_width_cells * app->job->cell_size_mm,
-            app->used_height_cells * app->job->cell_size_mm);
-        igText("time         %.3f s", app->seconds);
+        igTextWrapped("Result: %s", app->result_settings);
+        igText("plates       %u", (unsigned) view->sheet_count);
+        igText("placed       %u of %u", (unsigned) view->placement_count,
+            (unsigned) view->part_count);
+        igText("unplaced     %u (%u oversized)",
+            (unsigned) (view->part_count - view->placement_count),
+            (unsigned) view->oversized_count);
+        igText("total used   %.2f %%", bp_view_utilisation(view) * 100.0);
+        if (view->sheet_count > 0U) {
+            const bp_sheet_layout_t *last = &view->sheets[view->sheet_count - 1U];
+
+            igText("last W * H   %.2f mm2", (double) last->width_cells * last->height_cells
+                * view->cell_size_mm * view->cell_size_mm);
+        }
+        igText("search       %u rounds, %u improvements", (unsigned) app->iterations_run,
+            (unsigned) app->improvements);
+        igText("time         %.3f CPU s", app->seconds);
+        igText("export       %s", view->saved ? "all plates saved" : "not saved");
+        if (view->placement_count < view->part_count
+            && igCollapsingHeader_TreeNodeFlags("Unplaced parts", 0)) {
+            uint32_t index;
+
+            for (index = 0U; index < view->part_count; ++index)
+                if (!view->placed[index])
+                    igText("part %u, label %u", (unsigned) index + 1U,
+                        (unsigned) view->labels[index]);
+        }
     }
+    if (app->job)
+        igTextWrapped("Loaded: %s", app->loaded_path);
     igSeparator();
-    igText("%s", app->status);
+    igTextWrapped("%s", app->status);
 }
 
 /*
@@ -991,11 +1466,62 @@ s_write_shot(const char *path, int width, int height)
     (void) fprintf(out, "P6\n%d %d\n255\n", width, height);
     /* OpenGL reads bottom row first; PPM wants the top row first. */
     for (row = height - 1; row >= 0; --row)
-        (void) fwrite(pixels + (size_t) row * (size_t) width * 3U, 1U,
-            (size_t) width * 3U, out);
-    (void) fclose(out);
+        if (fwrite(pixels + (size_t) row * (size_t) width * 3U, 1U,
+            (size_t) width * 3U, out) != (size_t) width * 3U)
+            break;
     free(pixels);
-    return 1;
+    {
+        int failed = ferror(out);
+        int closed = fclose(out);
+
+        return !failed && closed == 0;
+    }
+}
+
+/* Parses automation counters without truncation, overflow or ignored suffixes. */
+static int
+s_parse_count(const char *text)
+{
+    char *end;
+    unsigned long count;
+
+    BP_REQUIRE(text);
+    count = strtoul(text, &end, 10);
+    if (text[0] < '0' || text[0] > '9' || *end != '\0' || count > INT_MAX) {
+        (void) fprintf(stderr, "bp_gui: invalid counter: %s\n", text);
+        exit(1);
+    }
+    return (int) count;
+}
+
+/*
+ * Parses one millimetre value from the command line. Only the syntax is
+ * checked: whether the size is usable is decided by the same load path the
+ * controls use, so the command line cannot accept what the window refuses.
+ */
+static double
+s_parse_mm(const char *text)
+{
+    char *end;
+    double value;
+
+    BP_REQUIRE(text);
+    value = strtod(text, &end);
+    if (end == text || *end != '\0') {
+        (void) fprintf(stderr, "bp_gui: invalid millimetre value: %s\n", text);
+        exit(1);
+    }
+    return value;
+}
+
+/* Sets the geometry controls to a typed size, naming its preset if it has one. */
+static void
+s_set_sheet_size(s_app_t *app, double width_mm, double height_mm)
+{
+    BP_REQUIRE(app);
+    app->sheet_width_mm = width_mm;
+    app->sheet_height_mm = height_mm;
+    app->size_preset = s_preset_for(width_mm, height_mm);
 }
 
 /* Opens a window, packs a job and shows it until the window is closed. */
@@ -1011,18 +1537,33 @@ main(int argc, char **argv)
     int shot_after_frames = 0;
     int frame = 0;
     int argument;
+    int selected_sheet = 1;
+    int selected_explicitly = 0;
+    int requested_step = -1;
+    int want_export = 0;
+    int want_apply = 0;
+    double apply_width_mm = 0.0;
+    double apply_height_mm = 0.0;
+    int exit_code = 0;
     GLFWwindow *window;
     ImGuiIO *io;
 
-    app.cell_size_mm = 1.0f;
+    app.size_preset = S_PRESET_JOB;
+    app.sheet_width_mm = 1200.0;
+    app.sheet_height_mm = 1200.0;
+    app.cell_from_job = true;
+    app.cell_size_mm = 1.0;
     app.time_budget_seconds = 3.0f;
     app.compact_fraction = 0.4f;
     app.blink_rate = 0.08f;
     app.max_ruin = 8;
+    app.max_sheets = 4;
+    app.search_rounds = 128;
     app.zoom = 0.5f;
     app.show_labels = true;
+    app.show_box = true;
     (void) snprintf(app.save_path, sizeof app.save_path, "%s",
-        "build/nest.svg");
+        "nest.svg");
     if (!realpath(".", app.browser.directory))
         (void) snprintf(app.browser.directory, sizeof app.browser.directory,
             "%s", ".");
@@ -1036,7 +1577,56 @@ main(int argc, char **argv)
                 shot_after_frames = 4;
         } else if (strcmp(argv[argument], "--frames") == 0
             && argument + 1 < argc) {
-            shot_after_frames = atoi(argv[++argument]);
+            shot_after_frames = s_parse_count(argv[++argument]);
+            if (shot_after_frames == 0)
+                return 1;
+        } else if (strcmp(argv[argument], "--sheets") == 0 && argument + 1 < argc) {
+            app.max_sheets = s_parse_count(argv[++argument]);
+            if (app.max_sheets == 0)
+                return 1;
+            app.multiple_sheets = true;
+        } else if (strcmp(argv[argument], "--sheet") == 0 && argument + 1 < argc) {
+            selected_sheet = s_parse_count(argv[++argument]);
+            if (selected_sheet == 0)
+                return 1;
+            selected_explicitly = 1;
+        } else if (strcmp(argv[argument], "--search") == 0 && argument + 1 < argc) {
+            app.search_rounds = s_parse_count(argv[++argument]);
+            app.use_search = app.search_rounds > 0;
+            app.fixed_rounds = true;
+        } else if (strcmp(argv[argument], "--time") == 0 && argument + 1 < argc) {
+            char *end;
+
+            app.time_budget_seconds = (float) strtod(argv[++argument], &end);
+            if (*end != '\0' || !isfinite(app.time_budget_seconds)
+                || app.time_budget_seconds <= 0.0f)
+                return 1;
+            app.use_search = true;
+            app.fixed_rounds = false;
+        } else if (strcmp(argv[argument], "--sheet-size") == 0
+            && argument + 2 < argc) {
+            double width_mm = s_parse_mm(argv[++argument]);
+
+            s_set_sheet_size(&app, width_mm, s_parse_mm(argv[++argument]));
+        } else if (strcmp(argv[argument], "--cell") == 0 && argument + 1 < argc) {
+            app.cell_size_mm = s_parse_mm(argv[++argument]);
+            app.cell_from_job = false;
+        } else if (strcmp(argv[argument], "--apply-sheet-size") == 0
+            && argument + 2 < argc) {
+            apply_width_mm = s_parse_mm(argv[++argument]);
+            apply_height_mm = s_parse_mm(argv[++argument]);
+            want_apply = 1;
+        } else if (strcmp(argv[argument], "--step") == 0 && argument + 1 < argc) {
+            requested_step = s_parse_count(argv[++argument]);
+        } else if (strcmp(argv[argument], "--svg") == 0 && argument + 1 < argc) {
+            const char *path = argv[++argument];
+
+            if (strlen(path) >= sizeof app.save_path) {
+                (void) fprintf(stderr, "bp_gui: export path too long\n");
+                return 1;
+            }
+            memcpy(app.save_path, path, strlen(path) + 1U);
+            want_export = 1;
         } else if (strcmp(argv[argument], "--platform") == 0
             && argument + 1 < argc) {
             requested_platform = argv[++argument];
@@ -1046,11 +1636,19 @@ main(int argc, char **argv)
             (void) fprintf(stderr,
                 "usage: bp_gui [job-file] [--platform x11|wayland|auto]\n"
                 "              [--diagnose] [--shot <file.ppm>] "
-                "[--frames <n>]\n");
+                "[--frames <n>]\n"
+                "              [--sheets <limit>] [--sheet <1-based index>]\n"
+                "              [--sheet-size <w_mm> <h_mm>] [--cell <mm>]\n"
+                "              [--apply-sheet-size <w_mm> <h_mm>]\n"
+                "              [--search <rounds> | --time <CPU seconds>]\n"
+                "              [--step <local count>] [--svg <base path>]\n");
             return 1;
         } else {
-            (void) snprintf(app.job_path, sizeof app.job_path, "%s",
-                argv[argument]);
+            if (strlen(argv[argument]) >= sizeof app.job_path) {
+                (void) fprintf(stderr, "bp_gui: job path too long\n");
+                return 1;
+            }
+            memcpy(app.job_path, argv[argument], strlen(argv[argument]) + 1U);
         }
     }
 
@@ -1087,9 +1685,49 @@ main(int argc, char **argv)
     (void) ImGui_ImplGlfw_InitForOpenGL(window, true);
     (void) ImGui_ImplOpenGL3_Init("#version 130");
 
-    s_load(&app);
-    if (app.job)
+    if (s_load(&app, app.job_path).status == BP_JOB_OK)
         s_pack(&app);
+    else if (shot_path || want_export || selected_explicitly || want_apply) {
+        (void) fprintf(stderr, "bp_gui: %s\n", app.status);
+        exit_code = 1;
+        app.quit = 1;
+    }
+    /*
+     * Automation for the checks: pick a size after the first packing and
+     * press Apply & Pack, exactly as a user would. A refusal is an expected
+     * outcome to be checked, so it is reported but does not fail the run.
+     */
+    if (!app.quit && want_apply) {
+        s_set_sheet_size(&app, apply_width_mm, apply_height_mm);
+        s_pack_or_apply(&app);
+        if (s_geometry_pending(&app))
+            (void) fprintf(stderr, "bp_gui: %s\n", app.status);
+    }
+    if (!app.quit && selected_explicitly) {
+        if ((uint32_t) selected_sheet > app.result.sheet_count) {
+            (void) fprintf(stderr, "bp_gui: plate %d does not exist (%u used)\n",
+                selected_sheet, (unsigned) app.result.sheet_count);
+            exit_code = 1;
+            app.quit = 1;
+        } else {
+            bp_view_select(&app.result, (uint32_t) selected_sheet - 1U);
+        }
+    }
+    if (!app.quit && requested_step >= 0) {
+        if (app.result.sheet_count == 0U
+            || (uint32_t) requested_step > bp_view_active(&app.result)->placement_count) {
+            (void) fprintf(stderr, "bp_gui: step outside selected plate\n");
+            exit_code = 1;
+            app.quit = 1;
+        } else {
+            bp_view_set_visible(&app.result, (uint32_t) requested_step);
+        }
+    }
+    if (!app.quit && want_export && s_save_svg(&app).status != BP_VIEW_EXPORT_OK) {
+        (void) fprintf(stderr, "bp_gui: %s\n", app.status);
+        exit_code = 1;
+        app.quit = 1;
+    }
     /* Worth showing: it is the first thing to change when nothing appears. */
     (void) snprintf(app.status + strlen(app.status),
         sizeof app.status - strlen(app.status), "  [%s]", platform);
@@ -1156,14 +1794,17 @@ main(int argc, char **argv)
 
         /* Capture before the swap, while the frame is still the back buffer. */
         if (shot_path && frame + 1 >= shot_after_frames) {
-            if (!s_write_shot(shot_path, width, height))
-                (void) fprintf(stderr, "bp_gui: cannot write %s\n",
-                    shot_path);
+            if (!s_write_shot(shot_path, width, height)) {
+                (void) fprintf(stderr, "bp_gui: cannot write %s\n", shot_path);
+                exit_code = 1;
+            }
             glfwSwapBuffers(window);
             break;
         }
         glfwSwapBuffers(window);
         ++frame;
+        if (shot_after_frames > 0 && frame >= shot_after_frames)
+            break;
 
         /* Report after a few seconds of real frames, then leave. */
         if (diagnose && glfwGetTime() - diagnose_started >= 3.0) {
@@ -1180,5 +1821,7 @@ main(int argc, char **argv)
     glfwTerminate();
     if (app.job)
         bp_job_destroy(&app.job);
-    return 0;
+    free(app.sheets);
+    free(app.scratch_sheets);
+    return exit_code;
 }

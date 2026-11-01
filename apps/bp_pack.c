@@ -3,12 +3,16 @@
  * bottom-left-fill and reports the result, optionally as SVG.
  */
 #include "bp_bitmap.h"
+#include "bp_contract.h"
 #include "bp_job.h"
+#include "bp_multisheet.h"
 #include "bp_nester.h"
 #include "bp_place.h"
 #include "bp_search.h"
+#include "bp_sheet.h"
 #include "bp_svg.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,7 +27,11 @@ s_usage(void)
         "  --sort input|area|longest   part order (default: area)\n"
         "  --mode reference|jump|erosion   placement search (jump)\n"
         "  --cell <mm>                 override the job's cell size\n"
-        "  --search <iterations>       ruin and recreate instead of one pass\n"
+        "  --sheet-size <w_mm> <h_mm>  override the job's sheet size; width\n"
+        "                              and height are taken as given\n"
+        "  --sheets <count>            identical plates; minimise count, then\n"
+        "                              last-sheet bounding-box area\n"
+        "  --search <iterations>       search rounds (multi: order/width trials)\n"
         "  --time <seconds>            stop the search after this long\n"
         "  --contact <w>               how many cells of height a perfect\n"
         "                              fit is worth (default 0)\n"
@@ -34,8 +42,201 @@ s_usage(void)
         "  --compact <fraction>        share of the budget spent squeezing "
         "(0.4)\n"
         "  --svg <path>                write the layout as SVG\n"
-        "  --csv                       one machine-readable summary line\n");
+        "                              multi: <stem>-001.svg, -002.svg, ...\n"
+        "  --csv                       CSV summary (multi: one row per sheet)\n"
+        "  contact/window/ruin/blink/compact apply to single-sheet search only\n");
     exit(1);
+}
+
+/*
+ * Parses one millimetre value of an override. Only the syntax is checked here:
+ * whether the value is usable is the loader's call, so the CLI and the GUI
+ * refuse exactly the same sizes with the same message.
+ */
+static double
+s_parse_mm(const char *text)
+{
+    char *end;
+    double value;
+
+    BP_REQUIRE(text);
+    value = strtod(text, &end);
+    if (end == text || *end != '\0')
+        s_usage();
+    return value;
+}
+
+/*
+ * Reports a failed load. A refused sheet gets the shared explanation with
+ * its figures and a cell size suggestion, rather than the bare status.
+ */
+static void
+s_report_load_failure(const char *job_path, const bp_job_load_result_t *loaded)
+{
+    char explanation[BP_SHEET_EXPLAIN_CAPACITY];
+
+    BP_REQUIRE(job_path && loaded);
+    if (loaded->line_number > 0U) {
+        (void) fprintf(stderr, "bp_pack: %s:%u: %s\n", job_path,
+            loaded->line_number, bp_job_status_text(loaded->status));
+        return;
+    }
+    if (loaded->sheet_plan.status != BP_SHEET_OK) {
+        bp_sheet_explain(&loaded->sheet_plan, bp_sheet_default_limits(),
+            explanation, sizeof explanation);
+        (void) fprintf(stderr, "bp_pack: %s: %s: %s\n", job_path,
+            bp_job_status_text(loaded->status), explanation);
+        return;
+    }
+    (void) fprintf(stderr, "bp_pack: %s: %s\n", job_path,
+        bp_job_status_text(loaded->status));
+}
+
+/* Options shared by the multi-sheet solve, report and per-sheet SVG export. */
+typedef struct {
+    bp_job_t *job;
+    uint32_t max_sheets;
+    bp_nest_sort_t sort;
+    bp_place_mode_t mode;
+    uint32_t iterations;
+    double time_budget_seconds;
+    const char *svg_path;
+    int want_csv;
+} s_multi_options_t;
+
+/* Runs a complete multi-sheet job, preserving original part indices in exports. */
+static int
+s_run_multisheet(s_multi_options_t options)
+{
+    bp_job_t *job = options.job;
+    uint32_t capacity;
+    bp_sheet_layout_t *sheets;
+    bp_sheet_layout_t *scratch;
+    bp_multisheet_result_t result;
+    char *svg_path = NULL;
+    size_t stem_length = 0U;
+    uint32_t index;
+    int exit_code = 1;
+
+    BP_REQUIRE(job);
+    BP_REQUIRE(options.max_sheets > 0U);
+    capacity = options.max_sheets < job->part_count
+        ? options.max_sheets : job->part_count;
+    sheets = calloc(capacity, sizeof *sheets);
+    scratch = calloc(capacity, sizeof *scratch);
+    if (!sheets || !scratch) {
+        (void) fprintf(stderr, "bp_pack: out of memory for multi-sheet layout\n");
+        goto done;
+    }
+    if (options.svg_path) {
+        size_t length = strlen(options.svg_path);
+
+        svg_path = malloc(length + 32U);
+        if (!svg_path) {
+            (void) fprintf(stderr, "bp_pack: out of memory for SVG path\n");
+            goto done;
+        }
+        stem_length = length >= 4U && strcmp(options.svg_path + length - 4U, ".svg") == 0
+            ? length - 4U : length;
+        memcpy(svg_path, options.svg_path, stem_length);
+    }
+    result = bp_multisheet_solve((bp_multisheet_args_t) {
+        .sheet = &job->sheet,
+        .parts = job->parts,
+        .part_count = job->part_count,
+        .max_sheets = options.max_sheets,
+        .sort = options.sort,
+        .place_mode = options.mode,
+        .iterations = options.iterations,
+        .time_budget_seconds = options.time_budget_seconds,
+        .seed = UINT64_C(0x5deece66d),
+        .scratch_order = job->order,
+        .scratch_best_order = job->scratch_weights,
+        .scratch_assigned = job->scratch_placed,
+        .scratch_placements = job->scratch_best,
+        .scratch_sheets = scratch,
+        .scratch_rows = job->scratch_rows,
+        .scratch_row_capacity = job->scratch_row_capacity,
+        .placements = job->placements,
+        .sheets = sheets,
+        .part_capacity = job->part_count,
+        .sheet_capacity = capacity
+    });
+    if (options.want_csv) {
+        (void) printf("sheet,placed,bbox_x_mm,bbox_y_mm,bbox_width_mm,"
+            "bbox_height_mm,bbox_area_mm2,sheet_utilisation\n");
+    } else {
+        (void) printf("sheets       %u used, %u available (%.1f x %.1f mm each)\n",
+            (unsigned) result.sheet_count, (unsigned) options.max_sheets,
+            job->sheet_width_mm, job->sheet_height_mm);
+        (void) printf("parts        %u requested, %u placed, %u unplaced (%u oversized)\n",
+            (unsigned) job->part_count, (unsigned) result.placed_count,
+            (unsigned) result.unplaced_count, (unsigned) result.oversized_count);
+        (void) printf("search       %u trials, %u improvements, %.3f CPU s\n",
+            (unsigned) result.iterations_run, (unsigned) result.improvements, result.seconds);
+    }
+    for (index = 0U; index < result.sheet_count; ++index) {
+        const bp_sheet_layout_t *layout = &sheets[index];
+        double cell = job->cell_size_mm;
+        double area_mm2 = (double) layout->width_cells * layout->height_cells * cell * cell;
+        double utilisation = (double) layout->placed_area_cells
+            / ((double) job->sheet_width_cells * job->sheet_height_cells);
+
+        if (options.want_csv) {
+            (void) printf("%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.6f\n",
+                (unsigned) index + 1U, (unsigned) layout->placement_count,
+                layout->min_x_cells * cell, layout->min_y_cells * cell,
+                layout->width_cells * cell, layout->height_cells * cell,
+                area_mm2, utilisation);
+        } else {
+            (void) printf("sheet %-5u  %u parts, box %.1f x %.1f mm = %.1f mm2, %.2f %% used\n",
+                (unsigned) index + 1U, (unsigned) layout->placement_count,
+                layout->width_cells * cell, layout->height_cells * cell,
+                area_mm2, utilisation * 100.0);
+        }
+        if (svg_path) {
+            FILE *out;
+            bp_svg_result_t svg;
+
+            (void) snprintf(svg_path + stem_length, 32U, "-%03u.svg", (unsigned) index + 1U);
+            out = fopen(svg_path, "w");
+            if (!out) {
+                (void) fprintf(stderr, "bp_pack: cannot write %s\n", svg_path);
+                goto done;
+            }
+            svg = bp_svg_write((bp_svg_write_args_t) {
+                .out = out,
+                .sheet_width_cells = job->sheet_width_cells,
+                .sheet_height_cells = job->sheet_height_cells,
+                .cell_size_mm = cell,
+                .parts = job->parts,
+                .part_count = job->part_count,
+                .placements = job->placements + layout->first_placement,
+                .placement_count = layout->placement_count,
+                .labels = job->labels,
+                .draw_labels = 1
+            });
+            if (fclose(out) != 0 || svg.status != BP_SVG_OK) {
+                (void) fprintf(stderr, "bp_pack: SVG write failed: %s\n", svg_path);
+                goto done;
+            }
+        }
+    }
+    if (result.unplaced_count > 0U) {
+        memset(job->placed, 0, job->part_count);
+        for (index = 0U; index < result.placed_count; ++index)
+            job->placed[job->placements[index].part_index] = 1U;
+        for (index = 0U; index < job->part_count; ++index)
+            if (!job->placed[index])
+                (void) fprintf(stderr, "bp_pack: unplaced part %u (label %u)\n",
+                    (unsigned) index + 1U, (unsigned) job->labels[index]);
+    }
+    exit_code = result.status == BP_MULTISHEET_COMPLETE ? 0 : 2;
+done:
+    free(svg_path);
+    free(scratch);
+    free(sheets);
+    return exit_code;
 }
 
 /* Reads a job, packs it, reports the result and optionally writes an SVG. */
@@ -47,6 +248,8 @@ main(int argc, char **argv)
     const char *job_path = NULL;
     const char *svg_path = NULL;
     double cell_override_mm = 0.0;
+    double sheet_width_mm = 0.0;
+    double sheet_height_mm = 0.0;
     unsigned long search_iterations = 0U;
     double time_budget_seconds = 0.0;
     bp_score_weights_t weights = bp_score_default_weights();
@@ -55,6 +258,8 @@ main(int argc, char **argv)
     double blink_rate = 0.08;
     double compact_fraction = 0.4;
     int want_csv = 0;
+    uint32_t max_sheets = 0U;
+    int single_sheet_options = 0;
     int argument;
     bp_job_load_result_t loaded;
     bp_job_t *job;
@@ -94,36 +299,56 @@ main(int argc, char **argv)
                 mode = BP_PLACE_EROSION;
             else
                 s_usage();
+        } else if (strcmp(item, "--sheets") == 0 && argument + 1 < argc) {
+            char *end;
+            const char *text = argv[++argument];
+            unsigned long value = strtoul(text, &end, 10);
+
+            if (text[0] < '0' || text[0] > '9' || *end != '\0'
+                || value == 0UL || value > UINT32_MAX)
+                s_usage();
+            max_sheets = (uint32_t) value;
         } else if (strcmp(item, "--search") == 0 && argument + 1 < argc) {
             search_iterations = (unsigned long) strtoul(argv[++argument],
                 NULL, 10);
         } else if (strcmp(item, "--time") == 0 && argument + 1 < argc) {
             time_budget_seconds = strtod(argv[++argument], NULL);
-            if (!(time_budget_seconds > 0.0))
+            if (!isfinite(time_budget_seconds) || !(time_budget_seconds > 0.0))
                 s_usage();
         } else if (strcmp(item, "--contact") == 0 && argument + 1 < argc) {
+            single_sheet_options = 1;
             weights.contact_weight = strtod(argv[++argument], NULL);
             if (weights.contact_weight < 0.0)
                 s_usage();
         } else if (strcmp(item, "--window") == 0 && argument + 1 < argc) {
+            single_sheet_options = 1;
             height_window = (uint32_t) strtoul(argv[++argument], NULL, 10);
             if (height_window == 0U)
                 s_usage();
         } else if (strcmp(item, "--ruin") == 0 && argument + 1 < argc) {
+            single_sheet_options = 1;
             max_ruin = (uint32_t) strtoul(argv[++argument], NULL, 10);
             if (max_ruin == 0U)
                 s_usage();
         } else if (strcmp(item, "--blink") == 0 && argument + 1 < argc) {
+            single_sheet_options = 1;
             blink_rate = strtod(argv[++argument], NULL);
             if (blink_rate < 0.0 || blink_rate >= 1.0)
                 s_usage();
         } else if (strcmp(item, "--compact") == 0 && argument + 1 < argc) {
+            single_sheet_options = 1;
             compact_fraction = strtod(argv[++argument], NULL);
             if (compact_fraction < 0.0 || compact_fraction > 1.0)
                 s_usage();
         } else if (strcmp(item, "--cell") == 0 && argument + 1 < argc) {
             cell_override_mm = strtod(argv[++argument], NULL);
             if (!(cell_override_mm > 0.0))
+                s_usage();
+        } else if (strcmp(item, "--sheet-size") == 0 && argument + 2 < argc) {
+            sheet_width_mm = s_parse_mm(argv[++argument]);
+            sheet_height_mm = s_parse_mm(argv[++argument]);
+            /* Zero means "no override" to the loader, so refuse it here. */
+            if (sheet_width_mm == 0.0 || sheet_height_mm == 0.0)
                 s_usage();
         } else if (strcmp(item, "--svg") == 0 && argument + 1 < argc) {
             svg_path = argv[++argument];
@@ -139,18 +364,37 @@ main(int argc, char **argv)
     }
     if (!job_path)
         s_usage();
+    if (search_iterations > UINT32_MAX || (max_sheets > 0U && single_sheet_options))
+        s_usage();
 
-    loaded = bp_job_load(job_path, cell_override_mm);
+    loaded = bp_job_load_with((bp_job_load_args_t) {
+        .path = job_path,
+        .sheet_width_mm = sheet_width_mm,
+        .sheet_height_mm = sheet_height_mm,
+        .cell_size_mm = cell_override_mm,
+        .limits = bp_sheet_default_limits()
+    });
     if (loaded.status != BP_JOB_OK) {
-        if (loaded.line_number > 0U)
-            (void) fprintf(stderr, "bp_pack: %s:%u: %s\n", job_path,
-                loaded.line_number, bp_job_status_text(loaded.status));
-        else
-            (void) fprintf(stderr, "bp_pack: %s: %s\n", job_path,
-                bp_job_status_text(loaded.status));
+        s_report_load_failure(job_path, &loaded);
         return 1;
     }
     job = loaded.job;
+
+    if (max_sheets > 0U) {
+        exit_code = s_run_multisheet((s_multi_options_t) {
+            .job = job,
+            .max_sheets = max_sheets,
+            .sort = sort,
+            .mode = mode,
+            .iterations = search_iterations > 0UL ? (uint32_t) search_iterations
+                : time_budget_seconds > 0.0 ? UINT32_MAX : 0U,
+            .time_budget_seconds = time_budget_seconds,
+            .svg_path = svg_path,
+            .want_csv = want_csv
+        });
+        bp_job_destroy(&job);
+        return exit_code;
+    }
 
     started = clock();
     if (search_iterations > 0U || time_budget_seconds > 0.0) {
