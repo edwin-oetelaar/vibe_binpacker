@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bp_bitmap.h"
+#include "bp_cutplan.h"
 #include "bp_mask.h"
 #include "bp_nester.h"
 #include "bp_sheet.h"
@@ -55,6 +56,31 @@ typedef struct {
     /* The identifier from the job file, per part index, for reporting. */
     const uint32_t *labels;
 
+    /*
+     * Saw settings for guillotine cutting, as the file gives them. Free
+     * nesting does not use them, just as sawing does not use clearance.
+     * has_kerf is 0 when the file has no kerf line: a blade width is never
+     * assumed. Defaults otherwise: no trims, 3 stages, first cut either way,
+     * no minimum waste, exact cutting.
+     */
+    int has_kerf;
+    double kerf_mm;
+    double trim_left_mm;
+    double trim_right_mm;
+    double trim_bottom_mm;
+    double trim_top_mm;
+    uint32_t max_stages;
+    bp_cut_first_t first_cut;
+    double min_waste_mm;
+    uint8_t sizing_cut;
+    /*
+     * Per part index: a rect line's width and height, which is what a saw can
+     * cut, and whether it may turn a quarter turn. A poly part has size 0.
+     */
+    const double *rect_width_mm;
+    const double *rect_height_mm;
+    const uint8_t *rect_may_turn;
+
     uint32_t *order;
     /* Row scratch sized for BP_PLACE_EROSION on this job's sheet. */
     uint64_t *scratch_rows;
@@ -81,6 +107,9 @@ typedef struct {
     bp_orientation_t *owned_orientations;
     bp_part_t *owned_parts;
     uint32_t *owned_labels;
+    double *owned_rect_width_mm;
+    double *owned_rect_height_mm;
+    uint8_t *owned_rect_may_turn;
 } bp_job_t;
 
 typedef struct {
@@ -109,6 +138,16 @@ typedef struct {
  *   cell <size_mm>                     default 1.0
  *   clearance <mm>                     default 0.0
  *   rect <id> <quantity> <w_mm> <h_mm> <allow_quarter_turn>
+ *   poly <id> <quantity> <angles>      followed by ring lines
+ *
+ * and for guillotine cutting:
+ *
+ *   kerf <mm>                          blade width, required for sawing
+ *   trim <mm> | trim <l> <r> <b> <t>   edge trims, blade included
+ *   stages <n>                         1 to 8, default 3
+ *   first-cut x|y|any                  default any
+ *   min-waste <mm>                     default 0
+ *   sizing-cut 0|1                     default 0, exact cutting
  *
  * Blank lines and everything after a '#' are ignored. A positive
  * cell_size_override_mm replaces the file's cell line, which is how the
@@ -132,6 +171,13 @@ typedef struct {
     double sheet_height_mm;
     /* Replaces the file's cell line when nonzero. */
     double cell_size_mm;
+    /*
+     * 1 skips everything raster: no masks, no sheet buffers, no raster
+     * budget. Only the sizes, labels, part count and saw settings are filled;
+     * parts and the sheet bitmap stay empty. This is the load for sawing,
+     * whose plates may be far beyond what the raster budget allows.
+     */
+    int rectangles_only;
     /*
      * Budget for the sheet buffers and for the part raster scratch. All zero
      * means bp_sheet_default_limits(); otherwise every field is positive.

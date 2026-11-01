@@ -48,6 +48,8 @@ test: $(TEST_BINARIES)
 	@for binary in $(TEST_BINARIES); do echo "  $$binary"; $$binary || exit 1; done
 	@echo "  tools/test_check_cutplan.py"
 	@python3 tools/test_check_cutplan.py -q
+	@echo "  tools/check_cutplan.py on the plans test_bp_cutexport wrote"
+	@python3 tools/check_cutplan.py --svg --quiet build/cutplan-cases/*.csv
 
 # Sanitizers are mandatory for changes to indexing, shifting or masking.
 sanitize:

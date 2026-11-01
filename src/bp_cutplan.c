@@ -143,17 +143,24 @@ s_check_item(s_check_t *check, uint32_t index, const bp_cut_node_t *node)
     return 1;
 }
 
+/* No cut has produced the node, so no minimum waste width applies. */
+#define S_NEVER_CUT UINT64_MAX
+
 static int
-s_check_node(s_check_t *check, uint32_t index, uint32_t depth);
+s_check_node(s_check_t *check, uint32_t index, uint32_t depth,
+    uint64_t cut_width);
 
 /*
  * Checks how a panel is split: children edge to edge, one kerf apart, no
- * more than a kerf left after the last, waste wide enough to cut off, and
- * not deeper than the saw's stages. Then descends into the children.
+ * more than a kerf left after the last, and not deeper than the saw's stages.
+ * Then descends into the children, each with the width the saw cut it off
+ * at. A level without a cut cuts nothing off, so its single child inherits
+ * the panel's width: waste reached through such a level was still cut off
+ * one level up, at that width.
  */
 static int
 s_check_panel(s_check_t *check, uint32_t index, const bp_cut_node_t *panel,
-    uint32_t depth)
+    uint32_t depth, uint64_t cut_width)
 {
     const bp_cut_settings_t *settings;
     bp_cut_axis_t axis;
@@ -195,27 +202,32 @@ s_check_panel(s_check_t *check, uint32_t index, const bp_cut_node_t *panel,
     for (child = 0U; child < panel->child_count; ++child) {
         uint32_t child_index = panel->first_child + child;
         const bp_cut_node_t *node = &check->plan->nodes[child_index];
-        s_span_t inner = s_span(node, axis);
 
         if (node->kind == BP_CUT_NODE_ITEM)
             ++items;
         if (depth + 1U > settings->max_stages
             && (node->kind == BP_CUT_NODE_PANEL || items > 1U))
             return s_fail(check, BP_CUTPLAN_BAD_SIZING_CUT, child_index);
-        if (node->kind == BP_CUT_NODE_WASTE && has_cut
-            && inner.along_end - inner.along_start < settings->min_waste_10um)
-            return s_fail(check, BP_CUTPLAN_WASTE_TOO_NARROW, child_index);
     }
 
-    for (child = 0U; child < panel->child_count; ++child)
-        if (!s_check_node(check, panel->first_child + child, depth + 1U))
+    for (child = 0U; child < panel->child_count; ++child) {
+        uint32_t child_index = panel->first_child + child;
+        s_span_t inner = s_span(&check->plan->nodes[child_index], axis);
+
+        if (!s_check_node(check, child_index, depth + 1U, has_cut
+                ? inner.along_end - inner.along_start : cut_width))
             return 0;
+    }
     return 1;
 }
 
-/* Visits one node exactly once and checks it by kind. */
+/*
+ * Visits one node exactly once and checks it by kind. cut_width is how wide
+ * the saw cut this piece off, across that cut, or S_NEVER_CUT.
+ */
 static int
-s_check_node(s_check_t *check, uint32_t index, uint32_t depth)
+s_check_node(s_check_t *check, uint32_t index, uint32_t depth,
+    uint64_t cut_width)
 {
     const bp_cut_node_t *node;
 
@@ -228,7 +240,9 @@ s_check_node(s_check_t *check, uint32_t index, uint32_t depth)
     if (node->kind == BP_CUT_NODE_ITEM)
         return s_check_item(check, index, node);
     if (node->kind == BP_CUT_NODE_PANEL)
-        return s_check_panel(check, index, node, depth);
+        return s_check_panel(check, index, node, depth, cut_width);
+    if (cut_width < check->plan->settings.min_waste_10um)
+        return s_fail(check, BP_CUTPLAN_WASTE_TOO_NARROW, index);
     return 1;
 }
 
@@ -295,7 +309,8 @@ bp_cutplan_check(bp_cutplan_check_args_t args)
             (void) s_fail(&check, BP_CUTPLAN_BAD_ROOT, entry->root);
             return check.result;
         }
-        if (!s_check_node(&check, entry->root, 0U))
+        /* Edge trims are scrap by definition, so the root has no minimum. */
+        if (!s_check_node(&check, entry->root, 0U, S_NEVER_CUT))
             return check.result;
     }
     /* Only a sound plan gets here; a stray node is a builder defect. */

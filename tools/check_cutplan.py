@@ -7,7 +7,11 @@ listed, and requires each one to cross exactly one current piece from edge to
 edge. Then every item must be one of the final pieces and everything else must
 be waste the saw can cut off. Only the Python stdlib is used.
 
+With --svg it also reads <stem>-001.svg, <stem>-002.svg, ... for each plate
+and requires the drawing to show exactly the items and cuts of the list.
+
     python3 tools/check_cutplan.py build/plan.csv
+    python3 tools/check_cutplan.py --svg --quiet build/cases/*.csv
 """
 import argparse
 import csv
@@ -15,7 +19,9 @@ from collections import Counter
 from decimal import Decimal, InvalidOperation
 import io
 import itertools
+from pathlib import Path
 import sys
+import xml.etree.ElementTree as ET
 
 SETTINGS = ("plate_width_mm", "plate_height_mm", "trim_left_mm",
             "trim_right_mm", "trim_bottom_mm", "trim_top_mm", "kerf_mm",
@@ -303,30 +309,78 @@ def check(text):
         saw.cut(plate, stage, cut_axis, position, kerf, start, end, line)
     placed, waste_area = saw.finish(items)
     plate_area = settings["plate_width_mm"] * settings["plate_height_mm"]
+    items_by_plate = {plate: sorted((label, rect, rotated) for _, p, label, rect, rotated
+                                    in items if p == plate)
+                      for _, plate, _ in plates}
     return {"plates": len(plates), "cuts": len(cuts), "placed": placed,
             "ordered": sum(part[0] for part in parts.values()),
-            "waste_share": waste_area / (plate_area * len(plates)) if plates else 0.0}
+            "waste_share": waste_area / (plate_area * len(plates)) if plates else 0.0,
+            "plate_size": (settings["plate_width_mm"], settings["plate_height_mm"]),
+            "items_by_plate": items_by_plate,
+            "cuts_by_plate": Counter(cut[1] for cut in cuts)}
+
+
+def check_svg(path, plate, summary):
+    """Require one plate's drawing to show exactly the list's items and cuts."""
+    width, height = summary["plate_size"]
+    root = ET.parse(path).getroot()
+    svg = "{http://www.w3.org/2000/svg}"
+    name = Path(path).name
+    if root.get("viewBox") != f"0 0 {width / 100:.2f} {height / 100:.2f}":
+        raise CutlistError(0, f"{name}: viewBox is not the plate")
+    if root.get("width") != f"{width / 100:.2f}mm" or root.get("data-plate") != str(plate):
+        raise CutlistError(0, f"{name}: size or plate number differs")
+    drawn, cuts = [], 0
+    for rect in root.iter(svg + "rect"):
+        if rect.get("class") == "cut":
+            cuts += 1
+        if rect.get("class") != "item":
+            continue
+        x, y, w, h = (units(rect.get(key), 0) for key in ("x", "y", "width", "height"))
+        # The drawing has y down; the list has y up.
+        drawn.append((rect.get("data-label"), (x, height - y - h, w, h),
+                      rect.get("data-rotated") == "1"))
+    if sorted(drawn) != summary["items_by_plate"][plate]:
+        raise CutlistError(0, f"{name}: drawn items differ from the cut list")
+    if cuts != summary["cuts_by_plate"][plate]:
+        raise CutlistError(0, f"{name}: {cuts} cuts drawn, "
+                              f"{summary['cuts_by_plate'][plate]} listed")
 
 
 def main():
-    """Check a cut list file and report the first broken rule or a summary."""
+    """Check cut list files and report the first broken rule or a summary."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("cutlist")
+    parser.add_argument("cutlists", nargs="+")
+    parser.add_argument("--svg", action="store_true",
+                        help="also check <stem>-NNN.svg for every plate")
+    parser.add_argument("--quiet", action="store_true",
+                        help="print one line for all files instead of a summary each")
     args = parser.parse_args()
-    with open(args.cutlist, encoding="ascii") as source:
-        text = source.read()
-    try:
-        summary = check(text)
-    except CutlistError as error:
-        print(f"{args.cutlist}: {error}", file=sys.stderr)
-        return 1
-    print(f"plates       {summary['plates']}")
-    print(f"cuts         {summary['cuts']}")
-    print(f"items        {summary['placed']} of {summary['ordered']} ordered")
-    print(f"waste        {summary['waste_share'] * 100:.2f} % of the plate area, "
-          "edge trims not counted")
-    print("ok: every cut is a guillotine cut, every item is its part")
+    for path in args.cutlists:
+        with open(path, encoding="ascii") as source:
+            text = source.read()
+        try:
+            summary = check(text)
+            if args.svg:
+                stem = Path(path).with_suffix("")
+                for plate in range(summary["plates"]):
+                    check_svg(f"{stem}-{plate + 1:03d}.svg", plate, summary)
+        except (CutlistError, OSError, ET.ParseError) as error:
+            print(f"{path}: {error}", file=sys.stderr)
+            return 1
+        if args.quiet:
+            continue
+        print(f"{path}")
+        print(f"plates       {summary['plates']}")
+        print(f"cuts         {summary['cuts']}")
+        print(f"items        {summary['placed']} of {summary['ordered']} ordered")
+        print(f"waste        {summary['waste_share'] * 100:.2f} % of the plate area, "
+              "edge trims not counted")
+        print("ok: every cut is a guillotine cut, every item is its part")
+    if args.quiet:
+        print(f"ok: {len(args.cutlists)} cut lists"
+              f"{' and their drawings' if args.svg else ''} pass every rule")
     return 0
 
 

@@ -29,6 +29,9 @@ typedef struct {
     uint32_t ring_count;
     uint32_t angle_count;
     double angles[S_MAX_ANGLES];
+    /* A rect line's size, which is what a saw can cut; 0 for a poly. */
+    double rect_width_mm;
+    double rect_height_mm;
 } s_spec_t;
 
 /* Growable arrays used only while loading. */
@@ -225,12 +228,18 @@ s_parse(const char *path, bp_job_t *job, s_source_t *source,
 
     job->cell_size_mm = 1.0;
     job->clearance_mm = 0.0;
+    job->max_stages = 3U;
+    job->first_cut = BP_CUT_FIRST_ANY;
 
     while (fgets(line, (int) S_LINE_MAX, input)) {
         char *comment = strchr(line, '#');
         char angle_text[256];
+        char word[16];
         double a;
         double b;
+        double c;
+        double d;
+        int fields;
         unsigned id;
         unsigned quantity;
         unsigned turn;
@@ -255,12 +264,53 @@ s_parse(const char *path, bp_job_t *job, s_source_t *source,
             if (!isfinite(a) || a < 0.0)
                 goto bad_line;
             job->clearance_mm = a;
+        } else if (sscanf(line, " kerf %lf", &a) == 1) {
+            if (!isfinite(a) || a < 0.0)
+                goto bad_line;
+            job->kerf_mm = a;
+            job->has_kerf = 1;
+        } else if ((fields = sscanf(line, " trim %lf %lf %lf %lf", &a, &b, &c,
+            &d)) >= 1) {
+            /* One value trims every edge alike; four are left right bottom top. */
+            if (fields == 1)
+                b = c = d = a;
+            else if (fields != 4)
+                goto bad_line;
+            if (!isfinite(a) || !isfinite(b) || !isfinite(c) || !isfinite(d)
+                || a < 0.0 || b < 0.0 || c < 0.0 || d < 0.0)
+                goto bad_line;
+            job->trim_left_mm = a;
+            job->trim_right_mm = b;
+            job->trim_bottom_mm = c;
+            job->trim_top_mm = d;
+        } else if (sscanf(line, " stages %u", &turn) == 1) {
+            if (turn < 1U || turn > BP_CUTPLAN_MAX_STAGES)
+                goto bad_line;
+            job->max_stages = (uint32_t) turn;
+        } else if (sscanf(line, " first-cut %15s", word) == 1) {
+            if (strcmp(word, "x") == 0)
+                job->first_cut = BP_CUT_FIRST_X;
+            else if (strcmp(word, "y") == 0)
+                job->first_cut = BP_CUT_FIRST_Y;
+            else if (strcmp(word, "any") == 0)
+                job->first_cut = BP_CUT_FIRST_ANY;
+            else
+                goto bad_line;
+        } else if (sscanf(line, " min-waste %lf", &a) == 1) {
+            if (!isfinite(a) || a < 0.0)
+                goto bad_line;
+            job->min_waste_mm = a;
+        } else if (sscanf(line, " sizing-cut %u", &turn) == 1) {
+            if (turn > 1U)
+                goto bad_line;
+            job->sizing_cut = (uint8_t) turn;
         } else if (sscanf(line, " rect %u %u %lf %lf %u", &id, &quantity, &a,
             &b, &turn) == 5) {
             /* A rectangle is sugar for a four-vertex polygon. */
             s_spec_t *spec;
 
-            if (quantity == 0U || a <= 0.0 || b <= 0.0 || turn > 1U)
+            if (quantity == 0U || !isfinite(a) || !isfinite(b) || a <= 0.0
+                || b <= 0.0 || turn > 1U)
                 goto bad_line;
             spec = s_begin_spec(source, (uint32_t) id, (uint32_t) quantity);
             if (!spec)
@@ -273,6 +323,8 @@ s_parse(const char *path, bp_job_t *job, s_source_t *source,
                 goto out_of_memory;
             spec->point_count = 4U;
             spec->ring_count = 1U;
+            spec->rect_width_mm = a;
+            spec->rect_height_mm = b;
             spec->angle_count = turn ? 2U : 1U;
             spec->angles[0] = 0.0;
             spec->angles[1] = 90.0;
@@ -678,6 +730,52 @@ s_source_free(s_source_t *source)
 }
 
 /*
+ * Fills the per-piece rect sizes, and the labels when no masks are built to
+ * fill them. Pieces follow the specifications in order, quantity at a time,
+ * exactly as s_build_masks numbers them.
+ */
+static int
+s_fill_pieces(bp_job_t *job, const s_source_t *source, int fill_labels)
+{
+    uint32_t index;
+    uint32_t piece = 0U;
+
+    BP_REQUIRE(job && source);
+    job->owned_rect_width_mm = calloc(job->part_count,
+        sizeof *job->owned_rect_width_mm);
+    job->owned_rect_height_mm = calloc(job->part_count,
+        sizeof *job->owned_rect_height_mm);
+    job->owned_rect_may_turn = calloc(job->part_count,
+        sizeof *job->owned_rect_may_turn);
+    if (fill_labels)
+        job->owned_labels = calloc(job->part_count, sizeof *job->owned_labels);
+    if (!job->owned_rect_width_mm || !job->owned_rect_height_mm
+        || !job->owned_rect_may_turn || (fill_labels && !job->owned_labels))
+        return 0;
+    for (index = 0U; index < source->spec_count; ++index) {
+        const s_spec_t *spec = &source->specs[index];
+        uint32_t copy;
+
+        for (copy = 0U; copy < spec->quantity; ++copy) {
+            job->owned_rect_width_mm[piece] = spec->rect_width_mm;
+            job->owned_rect_height_mm[piece] = spec->rect_height_mm;
+            job->owned_rect_may_turn[piece] = spec->rect_width_mm > 0.0
+                && spec->angle_count == 2U;
+            if (fill_labels)
+                job->owned_labels[piece] = spec->id;
+            ++piece;
+        }
+    }
+    BP_REQUIRE(piece == job->part_count);
+    job->rect_width_mm = job->owned_rect_width_mm;
+    job->rect_height_mm = job->owned_rect_height_mm;
+    job->rect_may_turn = job->owned_rect_may_turn;
+    if (fill_labels)
+        job->labels = job->owned_labels;
+    return 1;
+}
+
+/*
  * Limits that only keep the size arithmetic representable: the per-axis bound
  * the loader has always enforced, and no product guardrail. This is what
  * keeps bp_job_load's behaviour for the benchmark's resolution sweeps.
@@ -776,6 +874,25 @@ bp_job_load_with(bp_job_load_args_t args)
     if (args.cell_size_mm > 0.0)
         job->cell_size_mm = args.cell_size_mm;
 
+    for (index = 0U; index < source.spec_count; ++index)
+        instances += source.specs[index].quantity;
+    job->part_count = instances;
+
+    /* Sawing needs the sizes and the labels, and no raster at all. */
+    if (args.rectangles_only) {
+        if (!s_fill_pieces(job, &source, 1)) {
+            result.status = BP_JOB_OUT_OF_MEMORY;
+            goto failed;
+        }
+        s_source_free(&source);
+        result.job = job;
+        return result;
+    }
+    if (!s_fill_pieces(job, &source, 0)) {
+        result.status = BP_JOB_OUT_OF_MEMORY;
+        goto failed;
+    }
+
     result.sheet_plan = bp_sheet_plan((bp_sheet_plan_args_t) {
         .width_mm = job->sheet_width_mm,
         .height_mm = job->sheet_height_mm,
@@ -806,9 +923,7 @@ bp_job_load_with(bp_job_load_args_t args)
     for (index = 0U; index < source.spec_count; ++index) {
         orientation_bound += source.specs[index].angle_count;
         mask_bound += 2U * source.specs[index].angle_count;
-        instances += source.specs[index].quantity;
     }
-    job->part_count = instances;
 
     if (!s_workspace_init(&workspace, &source, job, &args.limits,
         &too_large)) {
@@ -924,6 +1039,9 @@ bp_job_destroy(bp_job_t **job)
     free((*job)->owned_orientations);
     free((*job)->owned_parts);
     free((*job)->owned_labels);
+    free((*job)->owned_rect_width_mm);
+    free((*job)->owned_rect_height_mm);
+    free((*job)->owned_rect_may_turn);
     free((*job)->order);
     free((*job)->placed);
     free((*job)->scratch_placed);

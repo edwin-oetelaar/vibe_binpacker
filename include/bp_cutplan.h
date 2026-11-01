@@ -20,7 +20,7 @@
  * undercounts what the saw has to do.
  *
  * Lengths are integers in units of 0.01 mm, named _10um. That is exact for
- * the usual blade widths, such as 4.4 mm, and reaches 42.9 m.
+ * the usual blade widths, such as 4.4 mm, and reaches 42.9 km.
  *
  * Kerf. Children of a panel are ordered along the split axis. The first
  * starts at the panel's start, and each next one starts exactly kerf after the
@@ -29,8 +29,9 @@
  * sawdust. Material left beyond that must be an explicit waste child.
  *
  * Minimum waste. A saw cannot cleanly cut off a sliver narrower than a
- * minimum width, so a waste child cut off a panel must be at least
- * min_waste_10um wide along the split axis.
+ * minimum width, so waste must be at least min_waste_10um wide across the
+ * last cut that cut it off. A level without a cut cuts nothing off, so waste
+ * below one is held to the width of the cut above it.
  *
  * Sizing cuts. With non_exact set, one extra stage beyond max_stages may bring
  * a single item to size: a node at depth max_stages may then be split into at

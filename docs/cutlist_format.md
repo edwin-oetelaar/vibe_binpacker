@@ -85,4 +85,20 @@ height are swapped.
    orientation, is turned only if the part may be, and no label is cut more
    often than ordered.
 7. Every other final piece is waste, and waste that a cut produced is at
-   least `min_waste_mm` wide across that cut.
+   least `min_waste_mm` wide across the last cut that produced it.
+
+## Drawings
+
+`bp_cutexport_svg` draws one plate per file, named `<stem>-001.svg`,
+`<stem>-002.svg`, ... next to `<stem>.csv`. Sizes are millimetres, the
+viewBox is the plate, and y points down as SVG requires; the cut list's y
+points up, so a drawn y is the plate height minus the list's y and height.
+
+- `<svg ... data-plate="0">` names the plate.
+- `<rect class="item" data-label="7" data-rotated="0" .../>` is an item.
+- `<rect class="waste" .../>` is hatched waste.
+- `<rect class="cut" data-stage="2" .../>` is the band one blade removes,
+  coloured by stage; stage 0 is an edge trim.
+
+`tools/check_cutplan.py --svg` requires each drawing to show exactly the
+items of its plate in the list, and as many cuts.

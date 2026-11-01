@@ -244,6 +244,19 @@ s_test_minimum_waste(void)
     fixture.plan.settings.min_waste_10um = 19121U;
     s_expect(&fixture, BP_CUTPLAN_WASTE_TOO_NARROW, 3U);
 
+    /*
+     * Waste below a level without a cut was still cut off one level up, at
+     * that width. Found by the random cross-check against check_cutplan.py.
+     */
+    s_init(&fixture);
+    fixture.nodes[3] = s_panel(0U, 30880U, 100000U, 19120U, 11U, 1U);
+    fixture.nodes[11] = s_waste(0U, 30880U, 100000U, 19120U);
+    fixture.plan.node_count = 12U;
+    fixture.plan.settings.min_waste_10um = 19120U;
+    s_expect(&fixture, BP_CUTPLAN_OK, BP_CUTPLAN_NO_NODE);
+    fixture.plan.settings.min_waste_10um = 19121U;
+    s_expect(&fixture, BP_CUTPLAN_WASTE_TOO_NARROW, 11U);
+
     /* Waste that no cut produced is not cut off, so it has no minimum. */
     s_init(&fixture);
     fixture.nodes[0] = s_panel(0U, 0U, 100000U, 50000U, 1U, 1U);

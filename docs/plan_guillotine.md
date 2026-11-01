@@ -1,18 +1,39 @@
 # Plan: guillotineversnijding voor plaat- en balkzagen
 
-Status: G0 klaar. `bp_cutplan` (model, controle en zaaglijst) in
-`include/bp_cutplan.h`, getest in `tests/test_bp_cutplan.c`; het
-zaaglijstformaat in [cutlist_format.md](cutlist_format.md) en de
-onafhankelijke controle `tools/check_cutplan.py`, getest in
-`tools/test_check_cutplan.py`; bronnen in `RESEARCH.md` sectie 11. G1 tot en
-met G5 staan open. Roadmap: P9 in `PLAN.md`.
+Status: G0 en G1 klaar, G2 tot en met G5 open. Roadmap: P9 in `PLAN.md`.
+
+- G0: `bp_cutplan` (model, controle en zaaglijst) in `include/bp_cutplan.h`,
+  getest in `tests/test_bp_cutplan.c`; het zaaglijstformaat in
+  [cutlist_format.md](cutlist_format.md) en de onafhankelijke controle
+  `tools/check_cutplan.py`, getest in `tools/test_check_cutplan.py`; bronnen
+  in `RESEARCH.md` sectie 11.
+- G1: de jobregels `kerf`, `trim`, `stages`, `first-cut`, `min-waste` en
+  `sizing-cut`; een raster-vrije laadroute (`rectangles_only`), zodat ook
+  jumboplaten buiten het rasterbudget te zagen zijn; `bp_cutjob` van job naar
+  instellingen en onderdelen in 0,01 mm; `bp_cutexport` voor CSV en SVG. Een
+  kruistest schrijft bij elke `make test` 200 willekeurige geldige plannen uit
+  C weg, en `check_cutplan.py --svg` moet ze allemaal met tekening en al
+  goedkeuren. Een eenmalige ronde van 5000 plannen kwam ook schoon door.
+
+Afwijkingen van het oorspronkelijke plan in G1:
+
+- `bp_pack --guillotine` schuift naar G2: zonder heuristiek is er geen plan om
+  te schrijven.
+- `clearance` en `kerf` zijn geen conflict. Vrije nesting negeert de
+  zaagregels en zagen negeert `clearance`, zodat een jobbestand voor beide
+  dient. Zagen vereist wel een `kerf`-regel: een zaagbladbreedte wordt nooit
+  aangenomen.
+- De kruistest vond een gat in de C-controle: afval onder een niveau zonder
+  snede ontsnapte aan de minimale-afvalregel. De C-controle geeft nu de
+  breedte van de laatste echte snede door; de Python-controle deed dat al.
 
 Keuzes die in G0 zijn vastgelegd, bovenop sectie 2:
 
 - Een rest van hooguit een zaagbladbreedte na het laatste stuk wordt door een
   laatste snede tot zaagsel; meer moet een expliciet afvalstuk zijn.
-- Minimaal afval geldt voor de maat dwars op de snede die het stuk afzaagt.
-  Afval dat geen snede maakte, zoals een ongebruikte plaat, heeft geen minimum.
+- Minimaal afval geldt voor de maat dwars op de laatste snede die het stuk
+  afzaagt, ook als daaronder nog een niveau zonder snede ligt. Afval dat geen
+  snede maakte, zoals een ongebruikte plaat, heeft geen minimum.
 - Een niveau met een enkel kind en geen snede telt als stadium. Dat telt nooit
   te weinig.
 - Randbesnoeiing is het totaal per rand, zaagblad inbegrepen. Een besnoeiing
@@ -78,7 +99,7 @@ representatie:
 De guillotinemodus werkt daarom met gehele lengtes in eenheden van 0,01 mm, als
 `uint32_t` met namen die eindigen op `_10um` (bijvoorbeeld `width_10um`). Dat
 is exact voor gangbare zaagsneden, deterministisch, past op embedded
-toolchains, en loopt tot 42,9 m: ruim genoeg voor jumboplaten van 5600 mm.
+toolchains, en loopt tot 42,9 km: ruim genoeg voor elke plaat.
 Onderdelen ronden naar boven af en platen naar beneden, net als nu.
 
 ### 2.2 Het legplan is een boom van sneden

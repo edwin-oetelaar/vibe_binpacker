@@ -291,6 +291,23 @@ geometry path. Ring winding does not matter: filling uses the even-odd rule,
 because real CAD input arrives wound arbitrarily and guessing at it would be
 worse than ignoring it.
 
+For guillotine cutting on a panel or beam saw, which is being built (P9 in
+[PLAN.md](PLAN.md)), a job also describes the saw:
+
+    kerf 4.4               # blade width in mm, required for sawing
+    trim 10                # edge trim, blade included; or trim <l> <r> <b> <t>
+    stages 3               # cutting stages the saw can make, 1 to 8
+    first-cut any          # x, y or any: which way stage 1 may run
+    min-waste 20           # narrowest strip of waste the saw can cut off
+    sizing-cut 0           # 1 allows one extra cut to bring a part to size
+
+Free nesting ignores these lines and sawing ignores `clearance`, so one job
+file serves both. A saw cuts rectangles, so sawing takes `rect` parts only and
+reports a `poly` part rather than replacing it by its bounding box. The cut
+list a saw operator gets is described in
+[docs/cutlist_format.md](docs/cutlist_format.md), and
+`tools/check_cutplan.py` checks one by sawing it cut by cut.
+
 ## The viewer
 
 A packing is a spatial thing, and a column of numbers hides everything that

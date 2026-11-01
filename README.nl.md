@@ -310,6 +310,24 @@ van een ring maakt niet uit: het vullen gaat volgens de even-oddregel, omdat
 CAD-export in de praktijk met willekeurige draairichting binnenkomt en ernaar
 raden slechter is dan hem negeren.
 
+Voor guillotineversnijding op een plaat- of balkzaag, die in aanbouw is (P9 in
+[PLAN.md](PLAN.md)), beschrijft een job ook de zaag:
+
+    kerf 4.4               # zaagbladbreedte in mm, verplicht voor zagen
+    trim 10                # randbesnoeiing incl. zaagblad; of trim <l> <r> <o> <b>
+    stages 3               # aantal zaagstadia van de zaag, 1 tot 8
+    first-cut any          # x, y of any: de richting van stadium 1
+    min-waste 20           # smalste afvalstrook die de zaag kan afzagen
+    sizing-cut 0           # 1 staat een extra snede toe om op maat te zagen
+
+Vrije nesting negeert deze regels en zagen negeert `clearance`, zodat één
+jobbestand voor beide dient. Een zaag maakt rechthoeken, dus zagen neemt alleen
+`rect`-onderdelen aan en meldt een `poly`-onderdeel in plaats van het stil door
+zijn omsluitende rechthoek te vervangen. De zaaglijst voor de zager staat
+beschreven in [docs/cutlist_format.md](docs/cutlist_format.md), en
+`tools/check_cutplan.py` controleert er een door hem snede voor snede na te
+zagen.
+
 ## De viewer
 
 Een legplan is iets ruimtelijks, en een kolom cijfers verbergt juist datgene
