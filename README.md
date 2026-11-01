@@ -192,17 +192,60 @@ Every run is repeatable: the same job, size and `--search` round count give
 the same layout, and the CLI's exit status and CSV output fit a planning
 script.
 
-**Sawing.** Choosing the plate already helps here: the saw's stock sizes are
-presets and remnants can be typed in. The layouts themselves are free-form
-nesting, though, and a panel or beam saw can only make straight cuts that run
-from edge to edge. Do not send these layouts to a saw yet. **Guillotine
-cutting is next**: layouts built only from continuous saw lines, so that a
-panel saw can cut them in stages.
+**Sawing.** A panel or beam saw only makes straight cuts from edge to edge,
+so free-form layouts are not for the saw. `bp_pack --guillotine` makes layouts
+that are: every plate is cut in stages, strips first, and comes with a saw
+list in cutting order. See [Cutting on a panel saw](#cutting-on-a-panel-saw).
 
 Know the current limits: one plate size per run (all plates in a multi-plate
 run are identical), rectangular plates only, and positions on a raster with
 conservative rounding: parts are never modelled smaller and plates never
 larger than they are, at the cost of up to one cell of space per edge.
+
+### Cutting on a panel saw
+
+```sh
+./build/bp_pack --guillotine --cutlist build/saw.csv --svg build/saw.svg jobs/saw.job
+python3 tools/check_cutplan.py --svg build/saw.csv
+```
+
+[jobs/saw.job](jobs/saw.job) is a set of kitchen cabinets on 2800 x 2070 mm
+chipboard: a 4.4 mm blade, 10 mm trimmed off every edge, three stages plus
+sizing cuts, no waste strip narrower than 20 mm, and doors whose decor may not
+turn. The saw lines are part of the [job format](#the-job-format). The run
+prints plates, parts, utilisation, the number of cuts and the strip left on
+the last plate, and writes:
+
+- `build/saw.csv`, the saw list: every cut in the order an operator makes it,
+  with its stage, position, blade width and extent, and every part with its
+  position. The format is in [docs/cutlist_format.md](docs/cutlist_format.md).
+- `build/saw-001.svg` onwards, one drawing per plate: parts with their labels,
+  waste hatched, and each cut drawn as the band the blade removes, coloured by
+  stage.
+
+The packer works plate by plate like the saw: strips across the plate, stacks
+in a strip, parts in a stack. Every leftover is either sawdust within one
+blade width or a waste strip the saw can cut off; nothing in between is ever
+left. Each plan is checked twice: by `bp_cutplan_check` in C before it is
+written, and by `tools/check_cutplan.py`, which ignores the plan and saws the
+list cut by cut. `--sheets` limits the plates and `--sheet-size` overrides the
+plate. Options that only mean something for free nesting, such as `--search`,
+are refused rather than ignored.
+
+What it achieves today, measured with `python3 tools/measure_guillotine.py`:
+
+| | |
+| --- | --- |
+| `jobs/saw.job` | 32 parts on 3 plates, 60 cuts; the area bound is 2 plates |
+| `demo`, `dense`, `multisheet` | the same number of plates as free nesting with search |
+| ten standard 2D bin packing classes, 500 instances | 1.24 times the area lower bound with quarter turns, 1.28 without |
+
+The area bound is optimistic: for classes of large parts the true optimum is
+well above it, so the ratio overstates the gap. The instances follow the
+published class definitions but are generated here, so they do not compare
+with numbers in the literature directly. This is the constructive baseline;
+search over the order and turns, and the viewer, come next (P9 in
+[PLAN.md](PLAN.md)).
 
 Measured with `python3 tools/measure_sheet_sizes.py --gui` on `jobs/demo.job`
 (x86-64, WSL2; median CPU time and largest peak resident memory of three
@@ -291,8 +334,9 @@ geometry path. Ring winding does not matter: filling uses the even-odd rule,
 because real CAD input arrives wound arbitrarily and guessing at it would be
 worse than ignoring it.
 
-For guillotine cutting on a panel or beam saw, which is being built (P9 in
-[PLAN.md](PLAN.md)), a job also describes the saw:
+For guillotine cutting on a panel or beam saw (`bp_pack --guillotine`, see
+[Cutting on a panel saw](#cutting-on-a-panel-saw)), a job also describes the
+saw:
 
     kerf 4.4               # blade width in mm, required for sawing
     trim 10                # edge trim, blade included; or trim <l> <r> <b> <t>

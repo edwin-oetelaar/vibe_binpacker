@@ -76,6 +76,9 @@ demo: $(BUILD)/bp_pack
 	python3 tools/check_layout.py $(BUILD)/searched.svg --clearance 1.0
 	$(BUILD)/bp_pack --time 6 --svg $(BUILD)/squeezed.svg jobs/shapes.job
 	python3 tools/check_layout.py $(BUILD)/squeezed.svg --clearance 1.0
+	$(BUILD)/bp_pack --guillotine --cutlist $(BUILD)/saw.csv \
+		--svg $(BUILD)/saw.svg jobs/saw.job
+	python3 tools/check_cutplan.py --svg $(BUILD)/saw.csv
 
 # The viewer is the only part of this project with a third-party dependency,
 # and it is fenced off: all, test, demo and benchmark never touch it. Run

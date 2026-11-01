@@ -199,18 +199,64 @@ Elke run is herhaalbaar: dezelfde job, maat en `--search`-rondes geven
 hetzelfde legplan, en de exitcode en CSV-uitvoer van de CLI passen in een
 planningsscript.
 
-**Zagen.** Het kiezen van de plaat helpt hier al: de voorraadmaten van de zaag
-zijn presets en reststukken vul je zelf in. De legplannen zelf zijn echter
-vrije nesting, en een plaat- of balkzaag kan alleen rechte sneden maken die van
-rand tot rand lopen. Stuur deze legplannen dus nog niet naar een zaag.
-**Guillotineversnijding komt hierna**: legplannen die alleen uit doorlopende
-zaaglijnen bestaan, zodat een plaatzaag ze in stappen kan zagen.
+**Zagen.** Een plaat- of balkzaag maakt alleen rechte sneden van rand tot
+rand, dus vrije legplannen zijn niet voor de zaag. `bp_pack --guillotine` maakt
+legplannen die dat wel zijn: elke plaat wordt in stadia gezaagd, eerst de
+stroken, en krijgt een zaaglijst in zaagvolgorde mee. Zie
+[Zagen op een plaatzaag](#zagen-op-een-plaatzaag).
 
 Ken de huidige grenzen: een plaatformaat per run (alle platen in een
 multi-plaatrun zijn gelijk), alleen rechthoekige platen, en posities op een
 raster met conservatieve afronding: onderdelen worden nooit kleiner en platen
 nooit groter gemodelleerd dan ze zijn, ten koste van hooguit een cel ruimte per
 rand.
+
+### Zagen op een plaatzaag
+
+```sh
+./build/bp_pack --guillotine --cutlist build/saw.csv --svg build/saw.svg jobs/saw.job
+python3 tools/check_cutplan.py --svg build/saw.csv
+```
+
+[jobs/saw.job](jobs/saw.job) is een set keukenkasten op spaanplaat van
+2800 x 2070 mm: een zaagblad van 4,4 mm, 10 mm randbesnoeiing rondom, drie
+stadia plus maatsneden, geen afvalstrook smaller dan 20 mm, en deuren waarvan
+het decor niet mag draaien. De zaagregels horen bij het
+[jobformaat](#het-jobformaat). De run meldt platen, onderdelen, benutting, het
+aantal sneden en de strook die op de laatste plaat overblijft, en schrijft:
+
+- `build/saw.csv`, de zaaglijst: elke snede in de volgorde waarin de zager
+  hem maakt, met stadium, positie, zaagbladbreedte en lengte, en elk onderdeel
+  met zijn positie. Het formaat staat in
+  [docs/cutlist_format.md](docs/cutlist_format.md).
+- `build/saw-001.svg` en verder, een tekening per plaat: onderdelen met hun
+  label, afval gearceerd, en elke snede als de strook die het zaagblad
+  wegneemt, gekleurd per stadium.
+
+De inpakker werkt plaat voor plaat zoals de zaag: stroken over de plaat, vakken
+in een strook, onderdelen in een vak. Elk restant is zaagsel binnen een
+zaagbladbreedte of een afvalstrook die de zaag kan afzagen; iets daartussenin
+blijft nooit over. Elk plan wordt twee keer gecontroleerd: door
+`bp_cutplan_check` in C voordat het wordt weggeschreven, en door
+`tools/check_cutplan.py`, dat het plan negeert en de zaaglijst snede voor snede
+nazaagt. `--sheets` begrenst het aantal platen en `--sheet-size` vervangt de
+plaatmaat. Opties die alleen voor vrije nesting betekenis hebben, zoals
+`--search`, worden geweigerd in plaats van genegeerd.
+
+Wat het nu haalt, gemeten met `python3 tools/measure_guillotine.py`:
+
+| | |
+| --- | --- |
+| `jobs/saw.job` | 32 onderdelen op 3 platen, 60 sneden; de oppervlaktegrens is 2 platen |
+| `demo`, `dense`, `multisheet` | evenveel platen als vrije nesting met zoeken |
+| tien standaardklassen voor 2D bin packing, 500 instanties | 1,24 keer de oppervlaktegrens met kwartslagen, 1,28 zonder |
+
+De oppervlaktegrens is optimistisch: bij klassen met grote onderdelen ligt het
+echte optimum er ruim boven, dus de verhouding overdrijft het gat. De
+instanties volgen de gepubliceerde klassedefinities maar zijn hier gegenereerd,
+dus ze zijn niet direct vergelijkbaar met getallen uit de literatuur. Dit is
+de constructieve basis; zoeken over volgorde en draaiing, en de viewer, komen
+hierna (P9 in [PLAN.md](PLAN.md)).
 
 Gemeten met `python3 tools/measure_sheet_sizes.py --gui` op `jobs/demo.job`
 (x86-64, WSL2; mediaan van de CPU-tijd en grootste piek van het residente
@@ -310,8 +356,9 @@ van een ring maakt niet uit: het vullen gaat volgens de even-oddregel, omdat
 CAD-export in de praktijk met willekeurige draairichting binnenkomt en ernaar
 raden slechter is dan hem negeren.
 
-Voor guillotineversnijding op een plaat- of balkzaag, die in aanbouw is (P9 in
-[PLAN.md](PLAN.md)), beschrijft een job ook de zaag:
+Voor guillotineversnijding op een plaat- of balkzaag (`bp_pack --guillotine`,
+zie [Zagen op een plaatzaag](#zagen-op-een-plaatzaag)) beschrijft een job ook
+de zaag:
 
     kerf 4.4               # zaagbladbreedte in mm, verplicht voor zagen
     trim 10                # randbesnoeiing incl. zaagblad; of trim <l> <r> <o> <b>

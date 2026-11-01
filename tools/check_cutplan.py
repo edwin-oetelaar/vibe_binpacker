@@ -247,7 +247,9 @@ class Saw:
                                           f"plate {plate} is narrower than the "
                                           "saw can cut off")
                 waste_area += piece.width * piece.height
-        return sum(cut_per_label.values()), waste_area
+        item_area = sum(p.width * p.height for pieces in self.pieces.values()
+                        for p in pieces if p.serial in matched)
+        return sum(cut_per_label.values()), waste_area, item_area
 
 
 def check(text):
@@ -307,7 +309,7 @@ def check(text):
         saw.add_plate(plate, first_axis, line)
     for line, plate, stage, cut_axis, position, kerf, start, end in cuts:
         saw.cut(plate, stage, cut_axis, position, kerf, start, end, line)
-    placed, waste_area = saw.finish(items)
+    placed, waste_area, item_area = saw.finish(items)
     plate_area = settings["plate_width_mm"] * settings["plate_height_mm"]
     items_by_plate = {plate: sorted((label, rect, rotated) for _, p, label, rect, rotated
                                     in items if p == plate)
@@ -315,6 +317,7 @@ def check(text):
     return {"plates": len(plates), "cuts": len(cuts), "placed": placed,
             "ordered": sum(part[0] for part in parts.values()),
             "waste_share": waste_area / (plate_area * len(plates)) if plates else 0.0,
+            "item_share": item_area / (plate_area * len(plates)) if plates else 0.0,
             "plate_size": (settings["plate_width_mm"], settings["plate_height_mm"]),
             "items_by_plate": items_by_plate,
             "cuts_by_plate": Counter(cut[1] for cut in cuts)}

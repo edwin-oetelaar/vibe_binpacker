@@ -1,0 +1,18 @@
+# Kitchen cabinet carcasses and doors on chipboard, for a panel saw.
+# Run: ./build/bp_pack --guillotine --cutlist build/saw.csv --svg build/saw.svg jobs/saw.job
+
+sheet 2800 2070
+kerf 4.4               # blade width
+trim 10                # every edge, blade included
+stages 3
+first-cut any
+min-waste 20
+sizing-cut 1
+clearance 1            # free nesting only; the saw uses kerf
+
+rect 1 8 720 560 0     # sides, grain along the 720 mm
+rect 2 4 564 560 0     # bottoms
+rect 3 8 564 100 1     # rails, no visible grain
+rect 4 6 562 540 0     # shelves
+rect 5 4 715 596 0     # doors, decor runs vertically
+rect 6 2 1196 596 0    # drawer fronts for the wide unit

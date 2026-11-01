@@ -1,6 +1,6 @@
 # Plan: guillotineversnijding voor plaat- en balkzagen
 
-Status: G0 en G1 klaar, G2 tot en met G5 open. Roadmap: P9 in `PLAN.md`.
+Status: G0, G1 en G2 klaar, G3 tot en met G5 open. Roadmap: P9 in `PLAN.md`.
 
 - G0: `bp_cutplan` (model, controle en zaaglijst) in `include/bp_cutplan.h`,
   getest in `tests/test_bp_cutplan.c`; het zaaglijstformaat in
@@ -14,6 +14,14 @@ Status: G0 en G1 klaar, G2 tot en met G5 open. Roadmap: P9 in `PLAN.md`.
   kruistest schrijft bij elke `make test` 200 willekeurige geldige plannen uit
   C weg, en `check_cutplan.py --svg` moet ze allemaal met tekening en al
   goedkeuren. Een eenmalige ronde van 5000 plannen kwam ook schoon door.
+
+- G2: `bp_guillotine`, de constructieve heuristiek, en `bp_pack
+  --guillotine` met `--cutlist`, `--svg`, `--sheets` en `--sheet-size`. Per
+  plaat worden alle varianten gebouwd die de zaag toestaat (eerste snede langs
+  x en y bij `first-cut any`, openers staand en liggend) en wint de variant
+  met de meeste oppervlakte. Elk resultaat gaat door `bp_cutplan_check`
+  voordat het wordt geschreven; 300 willekeurige opdrachten per `make test`,
+  een derde daarvan ook door `check_cutplan.py`. Metingen in sectie 9.
 
 Afwijkingen van het oorspronkelijke plan in G1:
 
@@ -266,6 +274,64 @@ Deze antwoorden bepalen de standaardwaarden, niet het ontwerp:
 - **Twee modellen naast elkaar.** Raster voor vrije nesting, exacte boom voor
   zagen. Dat is bewust: ze delen de job, de plaatmaat, de multi-plaatlogica en
   de uitvoer, en niet hun geometrie.
+
+## 9. Metingen G2
+
+`python3 tools/measure_guillotine.py`, deterministisch.
+
+Tien standaardklassen, 20 tot 100 onderdelen, tien instanties per klasse en
+grootte. De instanties zijn hier gegenereerd volgens de klassedefinities zoals
+Lodi, Martello & Vigo (1999) ze beschrijven, met een vaste seed; het zijn niet
+de gepubliceerde instantiebestanden. Geen zaagsnede, geen besnoeiing, acht
+stadia toegestaan (de heuristiek gebruikt er hoogstens vier). Platen opgeteld
+over de 50 instanties van een klasse; de verhouding is platen gedeeld door de
+oppervlaktegrens.
+
+| klasse | plaat | grens | vast | verhouding | kwartslagen | verhouding |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| I | 10 | 921 | 1041 | 1.130 | 1004 | 1.090 |
+| II | 30 | 127 | 132 | 1.039 | 128 | 1.008 |
+| III | 40 | 626 | 780 | 1.246 | 744 | 1.188 |
+| IV | 100 | 119 | 129 | 1.084 | 127 | 1.067 |
+| V | 100 | 820 | 1030 | 1.256 | 993 | 1.211 |
+| VI | 300 | 108 | 122 | 1.130 | 115 | 1.065 |
+| VII | 100 | 729 | 897 | 1.230 | 856 | 1.174 |
+| VIII | 100 | 723 | 897 | 1.241 | 852 | 1.178 |
+| IX | 100 | 1330 | 2092 | 1.573 | 2071 | 1.557 |
+| X | 100 | 453 | 526 | 1.161 | 508 | 1.121 |
+| alle | | 5956 | 7646 | 1.284 | 7398 | 1.242 |
+
+De 1000 runs samen kostten 1,37 CPU-seconde, opstarten van de processen
+inbegrepen.
+
+Prijs van zaagbaarheid op de rechthoekjobs: vrij genest met `--sheets 20
+--search 128` tegenover drie stadia plus maatsneden met de `clearance` van de
+job als zaagbladbreedte.
+
+| job | onderdelen | vrij, platen | zaag, platen | onderdelen op de zaagplaten |
+| --- | ---: | ---: | ---: | ---: |
+| demo | 36 | 1 | 1 | 78,5 % |
+| dense | 76 | 2 | 2 | 63,2 % |
+| multisheet | 3 | 2 | 2 | 67,5 % |
+
+`jobs/saw.job`: 32 van 32 onderdelen op 3 platen van 2800 x 2070 mm, 60
+sneden; de onderdelen beslaan 56,9 % van het plaatoppervlak. De
+oppervlaktegrens is 2 platen.
+
+Wat de metingen zeggen:
+
+- De oppervlaktegrens is zwak bij grote onderdelen. In klasse IX zijn de meeste
+  onderdelen breder en hoger dan de halve plaat, zodat er hooguit een of twee
+  per plaat passen; het echte optimum ligt daar ver boven de grens. De
+  verhouding is dus een bovengrens voor het gat, niet het gat.
+- Op de drie rechthoekjobs kost zaagbaarheid geen extra plaat. Dat is een klein
+  aantal jobs; het getal geldt voor deze jobs, niet in het algemeen.
+- `jobs/saw.job` gebruikt een derde plaat voor 2214 mm van zijn 2780 mm
+  strooklengte niet. Dat is waar G3 moet winnen: zoeken over volgorde en
+  draaiing, met als doel minder platen en daarna een grotere reststrook.
+- Vergelijking met de literatuur en met PackingSolver vraagt de gepubliceerde
+  instantiebestanden. Dat hoort bij G3, als er een zoeklaag is om te
+  vergelijken.
 
 ## Bronnen
 
