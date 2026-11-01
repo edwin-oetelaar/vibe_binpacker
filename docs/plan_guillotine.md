@@ -1,6 +1,24 @@
 # Plan: guillotineversnijding voor plaat- en balkzagen
 
-Status: ontwerp, nog niet geimplementeerd. Roadmap: P9 in `PLAN.md`.
+Status: G0 klaar. `bp_cutplan` (model, controle en zaaglijst) in
+`include/bp_cutplan.h`, getest in `tests/test_bp_cutplan.c`; het
+zaaglijstformaat in [cutlist_format.md](cutlist_format.md) en de
+onafhankelijke controle `tools/check_cutplan.py`, getest in
+`tools/test_check_cutplan.py`; bronnen in `RESEARCH.md` sectie 11. G1 tot en
+met G5 staan open. Roadmap: P9 in `PLAN.md`.
+
+Keuzes die in G0 zijn vastgelegd, bovenop sectie 2:
+
+- Een rest van hooguit een zaagbladbreedte na het laatste stuk wordt door een
+  laatste snede tot zaagsel; meer moet een expliciet afvalstuk zijn.
+- Minimaal afval geldt voor de maat dwars op de snede die het stuk afzaagt.
+  Afval dat geen snede maakte, zoals een ongebruikte plaat, heeft geen minimum.
+- Een niveau met een enkel kind en geen snede telt als stadium. Dat telt nooit
+  te weinig.
+- Randbesnoeiing is het totaal per rand, zaagblad inbegrepen. Een besnoeiing
+  smaller dan het blad wordt helemaal zaagsel; alleen daar mag het blad over
+  de nabije rand hangen.
+- PackingSolver valt onder MIT: bruikbaar als externe meetlat.
 
 ## Uitgangspunt
 

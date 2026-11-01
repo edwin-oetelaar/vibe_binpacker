@@ -333,6 +333,41 @@ Steps 1-3 are a working nester. Steps 4-5 are where the material savings are.
 - **rectpack**, and Jylanki's *A Thousand Ways to Pack the Bin* - only relevant
   to the rectangle-only phase: MaxRects, Skyline, Guillotine, Shelf.
 
+## 11. Guillotine cutting, for panel and beam saws
+
+A saw only makes straight cuts from edge to edge of the piece on the table, so
+a sawable layout is a recursive split of the plate. The literature calls it
+two-dimensional bin packing with guillotine cuts, and the industrial variant
+bounds the number of *stages*: plate into strips, strips into stacks, stacks
+into items. Gilmore & Gomory (1965) introduced the staged view. The
+dimensions that matter in practice: the number of stages, exact versus
+non-exact (one extra sizing cut per item), fixed orientation versus quarter
+turns, the blade width, edge trims and a minimum waste width.
+
+- **Lodi, Martello & Vigo (1999)** treat exactly this family, fixed or
+  rotatable items, with or without the guillotine constraint, with one
+  heuristic per variant inside one tabu search framework.
+- **Charalambous & Fleszar (2011)** build a solution one bin at a time,
+  guided by an average-area sufficiency principle, fast on large instances.
+- **The ROADEF/EURO Challenge 2018** (Saint-Gobain, float glass) is the
+  industrial benchmark: 6 x 3.21 m jumbo sheets, three stages plus trimming,
+  defects to avoid, a minimum waste width.
+- **Libralesso & Fontan** won it with an anytime tree search (memory-bounded
+  A* with guides, symmetry breaking and pseudo-dominance). **PackingSolver**
+  (Fontan & Libralesso) generalises it to bin packing, knapsack and strip
+  packing with two or three stages, exact or not, cut thickness included.
+  MIT licence, so usable as an external reference in benchmarks.
+- The standard random instances for 2D bin packing are the classes of
+  **Berkey & Wang (1987)** and **Martello & Vigo (1998)**.
+
+For this project the consequence is a second geometry: an exact tree of cuts
+in 0.01 mm rather than the raster, because a saw works to exact sizes with a
+fractional blade width and sawability is a property of structure, not of
+positions. The design and phasing are in
+[docs/plan_guillotine.md](docs/plan_guillotine.md); the tree and its check
+are `bp_cutplan`, and `tools/check_cutplan.py` re-saws a cut list
+independently.
+
 ## Sources
 
 - Leao, Toledo, Oliveira, Carravilla, Alvarez-Valdes, *Irregular packing
@@ -368,5 +403,29 @@ Steps 1-3 are a working nester. Steps 4-5 are where the material savings are.
   packing problem solution*, IFAC-PapersOnLine, 2016.
   https://www.sciencedirect.com/science/article/pii/S2405896316328476
 - Jylanki, *A Thousand Ways to Pack the Bin*, 2010.
+- Gilmore, Gomory, *Multistage Cutting Stock Problems of Two and More
+  Dimensions*, Operations Research 13(1):94-120, 1965.
+  https://doi.org/10.1287/opre.13.1.94
+- Berkey, Wang, *Two-Dimensional Finite Bin-Packing Algorithms*, Journal of
+  the Operational Research Society 38(5):423-429, 1987.
+  https://doi.org/10.1057/jors.1987.70
+- Martello, Vigo, *Exact Solution of the Two-Dimensional Finite Bin Packing
+  Problem*, Management Science 44(3):388-399, 1998.
+  https://doi.org/10.1287/mnsc.44.3.388
+- Lodi, Martello, Vigo, *Heuristic and Metaheuristic Approaches for a Class of
+  Two-Dimensional Bin Packing Problems*, INFORMS Journal on Computing
+  11(4):345-357, 1999. https://doi.org/10.1287/ijoc.11.4.345
+- Charalambous, Fleszar, *A constructive bin-oriented heuristic for the
+  two-dimensional bin packing problem with guillotine cuts*, Computers &
+  Operations Research 38(10), 2011. https://doi.org/10.1016/j.cor.2010.12.013
+- Saint-Gobain, ROADEF, *Challenge ROADEF/EURO 2018: Cutting Optimization
+  Problem Description*, 2018.
+  https://www.roadef.org/challenge/2018/files/Challenge_ROADEF_EURO_SG_Description.pdf
+- Libralesso, Fontan, *An anytime tree search algorithm for the 2018
+  ROADEF/EURO challenge glass cutting problem*, EJOR, 2021.
+  https://arxiv.org/abs/2004.00963
+- Fontan, Libralesso, *PackingSolver: a solver for packing problems*, 2020.
+  https://arxiv.org/abs/2004.02603 ; code (MIT):
+  https://github.com/fontanf/packingsolver
 - sparrow: https://github.com/JeroenGar/sparrow
 - jagua-rs: https://github.com/JeroenGar/jagua-rs

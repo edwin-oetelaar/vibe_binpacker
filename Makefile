@@ -42,8 +42,12 @@ $(TEST_BINARIES): $(BUILD)/%: tests/%.c $(CORE_OBJECTS) | $(BUILD)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Itests $(DEPFLAGS) $< $(CORE_OBJECTS) \
 		-o $@ $(LDLIBS)
 
+# The cut list checker is Python and must stay independent of the C model,
+# so its own tests run here too.
 test: $(TEST_BINARIES)
 	@for binary in $(TEST_BINARIES); do echo "  $$binary"; $$binary || exit 1; done
+	@echo "  tools/test_check_cutplan.py"
+	@python3 tools/test_check_cutplan.py -q
 
 # Sanitizers are mandatory for changes to indexing, shifting or masking.
 sanitize:
