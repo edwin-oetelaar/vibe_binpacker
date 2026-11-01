@@ -174,7 +174,7 @@ Which route fits depends on what you need. If there is time pressure, or the
 result is critical, the first one is the sensible choice. If you have room and
 you are also looking for new talent, the second is worth considering.
 
-The whole repository is open, MIT licensed, including the results that
+The whole repository is open, under the AGPL, including the results that
 disappointed. A repository that shows only what worked tells you very little
 about how to get there.
 

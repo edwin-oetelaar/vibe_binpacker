@@ -178,7 +178,7 @@ Welke route past, hangt af van wat je nodig hebt. Zit er haast op, of is het
 resultaat kritisch, dan is de eerste de verstandige. Heb je ruimte en zoek je
 ook aanwas, dan is de tweede het overwegen waard.
 
-De hele repository staat open, MIT-licentie, inclusief de uitkomsten die
+De hele repository staat open, onder de AGPL, inclusief de uitkomsten die
 tegenvielen. Een repository die alleen laat zien wat werkte, vertelt je bar
 weinig over hoe je er komt.
 

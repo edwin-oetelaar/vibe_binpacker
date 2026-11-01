@@ -644,8 +644,34 @@ you are also looking for new talent, the second is worth considering.
 
 ## Licence
 
-[MIT](LICENSE) — use it, change it, ship it, commercially or otherwise. Keep
-the copyright notice with it and it is yours to do as you like with.
+Copyright (C) 2026 Edwin van den Oetelaar.
+
+vibe_binpacker is free software under the
+[GNU Affero General Public License, version 3](LICENSE) (SPDX:
+`AGPL-3.0-only`). In practice:
+
+- **Studying it, learning from it, teaching with it, hobby projects:** go
+  ahead.
+- **Using it in your own workshop to plan your own production:** also fine.
+- **Changing it and passing it on, or letting others use it over a network**
+  (a web service, an online quoting tool): allowed, but you must give them the
+  complete source of your version, your changes included, under the same
+  licence.
+- **Building it into a closed-source product or service:** not allowed under
+  the AGPL. Selling is not forbidden as such, but whoever ships it has to
+  hand their customers the full source under the AGPL.
+
+**Commercial licence.** To build the solver into a product without publishing
+your own source, a commercial licence is available. Contact
+[edwin@oetelaar.com](mailto:edwin@oetelaar.com).
+
+**Contributions** are welcome on the condition that they may be distributed
+under both the AGPL and the commercial licence. Please say so in your pull
+request.
+
+**Earlier versions.** Up to and including commit `e2c907a` (1 November 2026)
+this project was published under the MIT licence. Copies obtained under those
+terms keep them; everything after that commit is AGPL.
 
 ## Conventions
 
