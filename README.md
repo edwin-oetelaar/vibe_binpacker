@@ -583,7 +583,8 @@ their keyboard controls, rather than using the `--svg` export shortcut.
 | `Ctrl+Q` | quit |
 
 Quitting with an unsaved packing asks first, whether you use the menu, the
-shortcut or the window button.
+shortcut or the window button. **Help > About** shows who made it, when, and
+how to get in touch; `--about` opens it at start.
 
 The viewer is the only part of this project with a third-party dependency, and
 it is fenced off: `pixi run test`, `demo` and `benchmark` never touch it, and

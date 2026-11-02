@@ -65,8 +65,9 @@ typedef enum {
     S_POPUP_OPEN = 1,
     S_POPUP_SAVE = 2,
     S_POPUP_QUIT = 3,
-    S_POPUP_ABOUT = 4,
-    S_POPUP_SAVE_QUIT = 5
+    S_POPUP_CONTROLS = 4,
+    S_POPUP_SAVE_QUIT = 5,
+    S_POPUP_ABOUT = 6
 } s_popup_t;
 
 /* One line of the file browser. */
@@ -1079,8 +1080,10 @@ s_draw_popups(s_app_t *app)
         igOpenPopup_Str("Save SVG", 0);
     } else if (app->pending_popup == S_POPUP_QUIT) {
         igOpenPopup_Str("Quit", 0);
-    } else if (app->pending_popup == S_POPUP_ABOUT) {
+    } else if (app->pending_popup == S_POPUP_CONTROLS) {
         igOpenPopup_Str("Controls", 0);
+    } else if (app->pending_popup == S_POPUP_ABOUT) {
+        igOpenPopup_Str("About vibe_binpacker", 0);
     }
     app->pending_popup = S_POPUP_NONE;
 
@@ -1223,6 +1226,30 @@ s_draw_popups(s_app_t *app)
             igCloseCurrentPopup();
         igEndPopup();
     }
+    /* Who made it, when, and how to reach him; __DATE__ is the build. */
+    igSetNextWindowPos(centre, ImGuiCond_Appearing, s_vec(0.5f, 0.5f));
+    if (igBeginPopupModal("About vibe_binpacker", NULL,
+        ImGuiWindowFlags_AlwaysAutoResize)) {
+        modal_open = 1;
+        igText("vibe_binpacker");
+        igText("Cutting plans for sheet material, with two solvers:");
+        igText("  free nesting for laser, plasma, waterjet and router,");
+        igText("  guillotine cutting for panel and circular saws.");
+        igSpacing();
+        igText("Made by Edwin van den Oetelaar, 2026,");
+        igText("written largely with Claude (Anthropic).");
+        igText("This build: %s", __DATE__);
+        igSpacing();
+        igText("Contact   edwin@oetelaar.com");
+        igText("Web       oetelaar.com");
+        igText("Source    github.com/edwin-oetelaar/vibe_binpacker");
+        igText("Licence   AGPL-3.0; a commercial licence on request");
+        igSpacing();
+        if (igButton("Close", s_vec(90.0f, 0.0f))
+            || igIsKeyPressed_Bool(ImGuiKey_Escape, false))
+            igCloseCurrentPopup();
+        igEndPopup();
+    }
     return modal_open;
 }
 
@@ -1262,6 +1289,8 @@ s_draw_menu(s_app_t *app)
         }
         if (igBeginMenu("Help", true)) {
             if (igMenuItem_Bool("Controls", NULL, false, true))
+                app->pending_popup = S_POPUP_CONTROLS;
+            if (igMenuItem_Bool("About", NULL, false, true))
                 app->pending_popup = S_POPUP_ABOUT;
             igEndMenu();
         }
@@ -2406,6 +2435,9 @@ main(int argc, char **argv)
             requested_platform = argv[++argument];
         } else if (strcmp(argv[argument], "--diagnose") == 0) {
             diagnose = 1;
+        } else if (strcmp(argv[argument], "--about") == 0) {
+            /* Opens Help > About at start, so a screenshot can show it. */
+            app.pending_popup = S_POPUP_ABOUT;
         } else if (argv[argument][0] == '-') {
             (void) fprintf(stderr,
                 "usage: bp_gui [job-file] [--platform x11|wayland|auto]\n"
@@ -2414,6 +2446,7 @@ main(int argc, char **argv)
                 "              [--sheets <limit>] [--sheet <1-based index>]\n"
                 "              [--sheet-size <w_mm> <h_mm>] [--cell <mm>]\n"
                 "              [--apply-sheet-size <w_mm> <h_mm>] [--guillotine]\n"
+                "              [--about]\n"
                 "              [--search <rounds> | --time <CPU seconds>]\n"
                 "              [--step <local count>] [--svg <base path>]\n");
             return 1;

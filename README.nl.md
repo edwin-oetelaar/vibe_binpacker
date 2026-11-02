@@ -622,6 +622,8 @@ het toetsenbord, in plaats van de automatische exportoptie `--svg` te gebruiken.
 
 Afsluiten met een legplan dat je nog niet bewaard hebt vraagt eerst om
 bevestiging, of je nu het menu, de sneltoets of de vensterknop gebruikt.
+**Help > About** laat zien wie het maakte, wanneer, en hoe je contact
+opneemt; `--about` opent het bij het starten.
 
 De viewer is het enige deel van dit project dat een bibliotheek van derden
 gebruikt, en hij staat daarom apart: `pixi run test`, `demo` en `benchmark`

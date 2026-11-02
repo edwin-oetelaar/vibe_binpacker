@@ -41,7 +41,8 @@ En dit is precies het soort probleem waar onze engineers bij Fontys bij kunnen
 helpen. Ze hoeven de algoritmen niet te bedenken of te bewijzen; dat heeft de
 literatuur gedaan. Hun werk is uitzoeken wat er bestaat, kiezen, het inbouwen
 in iets dat draait, en meetbaar maken wat werkt en wat niet. Ook dit deel is
-grotendeels door Claude geschreven; de keuzes en de metingen waren het werk.
+grotendeels door Claude Opus 5.5 geschreven; de keuzes en de metingen waren
+het werk.
 Dat is een andere creativiteit.
 
 Heb je zo'n probleem op de werkvloer liggen? Dan is het uitstekend

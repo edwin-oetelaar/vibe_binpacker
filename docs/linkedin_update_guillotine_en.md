@@ -40,8 +40,8 @@ It is also exactly the kind of problem our engineers at Fontys can help with.
 They do not have to invent the algorithms or prove them; the literature has
 done that. Their work is to find out what exists, choose, build it into
 something that runs, and make measurable what works and what does not. This
-part, too, was largely written by Claude; the choices and the measurements
-were the work. That is a different kind of creativity.
+part, too, was largely written by Claude Opus 5.5; the choices and the
+measurements were the work. That is a different kind of creativity.
 
 Got a problem like that on your shop floor? It makes excellent student
 material: real constraints, real material, and no answer at the back of the
